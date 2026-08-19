@@ -237,6 +237,10 @@ const STROKE = {
 - 타깃: **iPhone Safari**. 홈 화면에 추가했을 때 앱처럼 뜨도록 PWA 메타 태그 포함.
   - `apple-mobile-web-app-capable`, `apple-mobile-web-app-status-bar-style`
   - `viewport-fit=cover` + safe-area-inset 대응
+  - **확대 차단**: iOS 사파리는 `user-scalable=no`를 무시하므로,
+    `touch-action: none`(문서 전체) + `gesturestart/change/end` preventDefault +
+    두 손가락 `touchmove` 차단을 함께 건다. 한 손가락 제스처는 그대로 통과한다.
+    입력창만 `touch-action: auto`로 열어 커서를 찍을 수 있게 둔다.
   - 512px 아이콘, `theme-color`
 - 데스크톱에서도 열리되, 최적화 대상은 아이폰 세로.
 - 외부 라이브러리 최소화. 애니메이션 라이브러리 불필요.

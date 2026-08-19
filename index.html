@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, viewport-fit=cover, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Clear Week">
@@ -40,9 +40,10 @@
     --free-width: clamp(84px, 27%, 132px);
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html { height: 100%; background: var(--paper); }
+  html { height: 100%; background: var(--paper); touch-action: none; }
   body {
     position: fixed; inset: 0; overflow: hidden;   /* 페이지 스크롤 없음 */
+    touch-action: none;                            /* 확대·더블탭 확대 차단 */
     background: var(--paper);
     color: var(--ink);
     font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo",
@@ -203,6 +204,8 @@
     -webkit-user-select: text; user-select: text;
   }
   .entry:focus { outline: none; }
+  /* 입력창 안에서는 커서를 찍을 수 있어야 한다 */
+  input { touch-action: auto; }
 </style>
 </head>
 <body>
@@ -1616,6 +1619,16 @@ const App = {
     }
   },
 };
+
+/* ═══════════════════════════════════════════════════════════════
+   8. 확대 차단 — iOS 사파리는 user-scalable=no를 무시하므로 직접 막는다
+   ═══════════════════════════════════════════════════════════════ */
+['gesturestart', 'gesturechange', 'gestureend'].forEach(type => {
+  document.addEventListener(type, e => e.preventDefault(), { passive: false });
+});
+document.addEventListener('touchmove', e => {
+  if (e.touches.length > 1) e.preventDefault();   /* 두 손가락 = 확대 시도 */
+}, { passive: false });
 
 App.init();
 </script>
