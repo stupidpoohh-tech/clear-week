@@ -74,14 +74,6 @@ async function strikeFirst(key) {
   for (let i = 1; i <= 14; i++) { await page.mouse.move(r.x + 1 + r.w * 0.95 * (i / 14), y); await page.waitForTimeout(8); }
   await page.mouse.up(); await page.waitForTimeout(400);
 }
-async function splitCell(i, frac = 0.55) {
-  const b = await cell(i).boundingBox();
-  const x = b.x + b.width * frac;
-  await page.mouse.move(x, b.y + 5); await page.mouse.down();
-  for (let k = 1; k <= 12; k++) { await page.mouse.move(x, b.y + 5 + (b.height - 10) * (k / 12)); await page.waitForTimeout(9); }
-  await page.mouse.up(); await page.waitForTimeout(700);
-}
-
 console.log('\n── 화면 ──');
 check('8칸(요일 7 + note)', await page.locator('.cell').count(), 8);
 check('페이지 스크롤 없음', await page.evaluate(() =>
@@ -114,6 +106,24 @@ await page.keyboard.press('Enter');
 await page.waitForTimeout(300);
 check('탭 편집 — 자리 유지', await days('thu'), ['멜팅의원', '웨비나 참석', '낭만백수달']);
 
+await cell(3).locator('.item').nth(1).click();
+await page.waitForTimeout(420);
+check('편집 중에는 원본이 안 보인다', await page.evaluate(() => {
+  const hidden = Array.from(document.querySelectorAll('.item[hidden]'));
+  return hidden.every(el => getComputedStyle(el).display === 'none');
+}), true);
+check('편집 중 같은 글이 두 번 보이지 않는다', await page.evaluate(() => {
+  const shown = Array.from(App.cells.thu.listEl.querySelectorAll('.item'))
+    .filter(el => getComputedStyle(el).display !== 'none')
+    .map(el => el.textContent);
+  const typed = App.cells.thu.listEl.querySelector('.entry').value;
+  return shown.filter(v => v === typed).length;
+}), 0);
+await page.keyboard.press('Escape');
+await page.locator('#weekTitle').click();
+await page.waitForTimeout(300);
+check('편집을 마치면 원본이 돌아온다', await days('thu'), ['멜팅의원', '웨비나 참석', '낭만백수달']);
+
 const one = await cell(3).locator('.item').nth(2).boundingBox();
 await page.mouse.move(one.x + 30, one.y + one.height / 2); await page.mouse.down();
 await page.waitForTimeout(680); await page.mouse.up(); await page.waitForTimeout(300);
@@ -125,33 +135,46 @@ check('가로 드래그로 긋기', await page.evaluate(() => App.week.days.thu.
 check('획은 시드+비율로 저장', await page.evaluate(() =>
   Object.keys(App.week.days.thu[0].strikes[0]).sort()), ['a', 'b', 'line', 'seed']);
 
-console.log('\n── 칸 나누기 ──');
+console.log('\n── 칸이 스스로 나뉜다 ──');
+const colsOf = key => page.evaluate(k => getComputedStyle(App.cells[k].listEl).columnCount, key);
+const fontOf = key => page.evaluate(k => {
+  const el = App.cells[k].listEl.querySelector('.item-text');
+  return el ? getComputedStyle(el).fontSize : null;
+}, key);
+
 await tapLabel(4);
-await type(['J41', 'G45', '장보기', '은행', '회의 준비', '서류', '운동', '독서']);
-const before = await page.evaluate(() => getComputedStyle(App.cells.fri.listEl.querySelector('.item-text')).fontSize);
-await splitCell(4);
-check('세로선 → 2단', await page.evaluate(() => getComputedStyle(App.cells.fri.listEl).columnCount), '2');
-check('확정된 선은 표의 실선(rect)', await page.evaluate(() => ({
-  path: App.cells.fri.splits.svg.querySelectorAll('path').length,
-  rect: App.cells.fri.splits.svg.querySelectorAll('rect').length })), { path: 0, rect: 1 });
-const after = await page.evaluate(() => getComputedStyle(App.cells.fri.listEl.querySelector('.item-text')).fontSize);
-check('나누면 그 칸 글씨가 작아짐', parseFloat(after) < parseFloat(before), true);
-check('안 나눈 칸은 그대로', await page.evaluate(() =>
-  getComputedStyle(App.cells.thu.listEl.querySelector('.item-text')).fontSize), before);
+await type(['J41', 'G45', '장보기']);
+check('3개까지는 한 열', await colsOf('fri'), '1');
+const font1 = await fontOf('fri');
 
-const lineX = await page.evaluate(() => App.cells.fri.splits.lines[0].x + App.cells.fri.section.getBoundingClientRect().left);
-const fb = await cell(4).boundingBox();
-await page.mouse.move(lineX, fb.y + fb.height / 2); await page.mouse.down();
-await page.waitForTimeout(680); await page.mouse.up(); await page.waitForTimeout(400);
-check('뒤 단이 차 있으면 선 삭제 거부', await page.evaluate(() => App.week.splits.fri.length), 1);
+await tapLabel(4);
+await type(['은행']);
+check('4개부터 2단', await colsOf('fri'), '2');
+const font2 = await fontOf('fri');
+check('나누면 그 칸 글씨가 작아짐', parseFloat(font2) < parseFloat(font1), true);
+check('안 나눈 칸은 그대로', await fontOf('thu'), font1);
 
-await page.evaluate(() => { App.week.days.fri = App.week.days.fri.slice(0, 3); App.save(); App.render(); });
-await page.waitForTimeout(500);
-const lx2 = await page.evaluate(() => App.cells.fri.splits.lines[0].x + App.cells.fri.section.getBoundingClientRect().left);
-const fb2 = await cell(4).boundingBox();
-await page.mouse.move(lx2, fb2.y + fb2.height / 2); await page.mouse.down();
-await page.waitForTimeout(680); await page.mouse.up(); await page.waitForTimeout(500);
-check('뒤 단이 비면 선 삭제 가능', await page.evaluate(() => App.week.splits.fri.length), 0);
+await tapLabel(4);
+await type(['회의 준비', '서류', '운동']);
+check('7개부터 3단', await colsOf('fri'), '3');
+check('더 작아짐', parseFloat(await fontOf('fri')) < parseFloat(font2), true);
+
+check('세로선은 그리지 않는다', await page.evaluate(() =>
+  document.querySelectorAll('.split-svg').length), 0);
+await page.evaluate(() => {
+  App.week.days.free = Array.from({ length: 12 }, (_, i) =>
+    ({ id: 'f' + i, text: '단어 ' + i, struck: false, createdAt: 0, strikes: [] }));
+  App.render();
+});
+await page.waitForTimeout(400);
+check('note 칸은 나뉘지 않는다', await colsOf('free'), '1');
+await page.evaluate(() => { App.week.days.free = []; App.save(); App.render(); });
+await page.waitForTimeout(300);
+
+/* 줄었다가 다시 한 열로 돌아오는지 */
+await page.evaluate(() => { App.week.days.fri = App.week.days.fri.slice(0, 2); App.save(); App.render(); });
+await page.waitForTimeout(400);
+check('줄이면 다시 한 열', await colsOf('fri'), '1');
 
 console.log('\n── 저장 · 주 이동 ──');
 await page.reload(); await page.waitForTimeout(500);
@@ -172,9 +195,9 @@ check('원래 주로 복귀', await page.locator('#weekTitle').textContent(), ti
 console.log('\n── 넘친 항목 ──');
 /* 칸 높이가 고정이라 넘치면 잘린다. 잘렸다는 사실은 화면에 남아야 한다 */
 await page.evaluate(() => {
-  App.week.days.tue = ['회의자료 정리', '장보기', '은행', '약국', '세탁물 찾기',
-                       '전화하기', '운동', '독서', '정산', '메일 회신']
-    .map((text, i) => ({ id: 'ov' + i, text, struck: false, createdAt: 0, strikes: [] }));
+  /* 3단으로 나뉘고도 남을 만큼 — 여기서부터가 진짜로 잘리는 구간 */
+  App.week.days.tue = Array.from({ length: 24 }, (_, i) =>
+    ({ id: 'ov' + i, text: '할 일 ' + (i + 1), struck: false, createdAt: 0, strikes: [] }));
   App.save(); App.render();
 });
 await page.waitForTimeout(500);
@@ -185,9 +208,11 @@ const markOf = key => page.evaluate(k => {
 const over1 = await markOf('tue');
 check('칸이 넘치면 잘렸다고 표시', /^\+\d+$/.test(over1 || ''), true);
 check('넘치지 않는 칸엔 표시 없음', await markOf('mon'), null);
-await splitCell(1);
-check('나누면 숨은 항목이 줄어듦',
-  parseInt(await markOf('tue') || '+0', 10) < parseInt(over1, 10), true);
+check('넘쳐도 3단까지는 자동으로 나뉜다', await page.evaluate(() =>
+  getComputedStyle(App.cells.tue.listEl).columnCount), '3');
+await page.evaluate(() => { App.week.days.tue = App.week.days.tue.slice(0, 3); App.save(); App.render(); });
+await page.waitForTimeout(400);
+check('항목을 줄이면 표시가 사라짐', await markOf('tue'), null);
 
 console.log('\n── 백업 ──');
 check('평소엔 백업 줄이 닫혀 있음', await page.locator('#backup').isVisible(), false);

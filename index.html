@@ -34,7 +34,7 @@
     /* 한 화면에 한 주가 다 들어가야 하므로 행은 촘촘하게 */
     --item-height: 26px;       /* 항목 한 줄 높이 */
     --label-w: 38px;           /* 날짜 라벨이 차지하는 왼쪽 폭 = 들여쓰기 기준 */
-    --col-gap: 12px;           /* 셀을 나눴을 때 열 사이 간격 */
+    --col-gap: 16px;           /* 열 사이 간격 — 선이 없으므로 여백이 경계다 */
 
     /* 오른쪽 자유 칸 — 종이 플래너의 우측 여백 */
     --free-width: clamp(84px, 27%, 132px);
@@ -175,11 +175,15 @@
   .cell-body {
     flex: 1 1 auto; min-width: 0; height: 100%;
     column-gap: var(--col-gap);
-    column-fill: auto;
+    /* 열 수를 항목 수가 정하므로 고르게 나눠 담는다.
+       왼쪽부터 채우면(auto) 7개일 때 셋째 단이 비는데, 글씨만 작아지고
+       자리는 안 생긴다. 나눈 만큼 실제로 나눠 담겨야 한다. */
+    column-fill: balance;
     overflow: hidden;
   }
 
   /* ── 항목 ────────────────────────────────────────────────── */
+  .item[hidden] { display: none; }   /* 클래스가 [hidden]을 이기지 않게 */
   .item {
     position: relative;
     min-height: calc(var(--item-height) * var(--fs));
@@ -213,13 +217,6 @@
     background: var(--paper);
     padding: 1px 0 1px 4px;
     pointer-events: none;
-  }
-
-  /* 셀을 나누는 세로 잉크선 */
-  .split-svg {
-    position: absolute; inset: 0;
-    width: 100%; height: 100%;
-    overflow: visible; pointer-events: none;
   }
 
   /* ── 입력 ────────────────────────────────────────────────── */
@@ -315,9 +312,6 @@ const SOUND = {
 /* ═══════════════════════════════════════════════════════════════
    2. 유틸
    ═══════════════════════════════════════════════════════════════ */
-/* 여러 항목을 훑어 지우는 중에는 칸 나누기가 끼어들지 않게 한다 */
-const Gesture = { purging: false };
-
 const NS = 'http://www.w3.org/2000/svg';
 const TAU = Math.PI * 2;
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -442,18 +436,28 @@ function haptic(on) {
 const STORE_PREFIX = 'clearweek:';
 const DAY_KEYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun', 'free'];
 const WEEK_DAYS = DAY_KEYS.slice(0, 7);   /* 왼쪽 열에 세로로 쌓이는 요일 칸 */
-const MAX_SPLITS = 2;                     /* 한 칸을 최대 3단까지 나눌 수 있다 */
-const SPLIT = {
-  commitRatio: 0.55,   // 칸 높이의 이 비율 이상 그어야 열이 나뉜다
-  slopPx: 8,           // 세로 제스처로 인정할 최소 이동량 (px)
-  settleMs: 130,       // 그은 선이 열 경계로 스르륵 자리잡는 시간 (ms)
-  handoffMs: 140,      // 손그림 획이 사라지고 표의 선이 대신 놓이는 시간 (ms)
-  rewindMs: 200,       // 미달 시 되감기는 시간 (ms)
-  rubReversals: 3,     // 이만큼 문대면 선이 지워지고 열이 합쳐진다
-  rubDistance: 160,    // 판정 후 이만큼 더 문대면 완전히 지워짐 (px)
-  longPressMs: 500,    // 세로선을 이만큼 누르고 있으면 삭제
-  grabPx: 22,          // 세로선을 잡은 것으로 볼 거리 (px)
+/* 칸은 스스로 나뉜다 — 항목이 늘면 열이 늘어난다.
+   세로선은 긋지도 그리지도 않는다. 표가 선으로 지저분해지지 않게. */
+const AUTO_SPLIT = {
+  toTwo: 3,      // 항목이 이보다 많으면 2단
+  toThree: 6,    // 이보다 많으면 3단
 };
+
+/* 요일 칸만 나뉜다. note 칸은 화면 높이 전체라 한 열로 충분하다. */
+function columnCount(key, itemCount) {
+  if (key === 'free') return 1;
+  if (itemCount > AUTO_SPLIT.toThree) return 3;
+  if (itemCount > AUTO_SPLIT.toTwo) return 2;
+  return 1;
+}
+
+/* 열 수를 칸에 반영한다. 나눌수록 그 칸의 글씨가 작아진다. */
+function applyColumns(section, bodyEl, key, itemCount) {
+  const cols = columnCount(key, itemCount);
+  section.dataset.splits = String(cols - 1);   /* 글씨 크기가 여기에 따라간다 */
+  bodyEl.style.columnCount = String(cols);
+  return cols;
+}
 
 /* 라벨을 꾹 눌러 아래로 끌면 요일 아래 메모를 적는다 */
 const SUBLABEL = {
@@ -494,9 +498,9 @@ function weekTitle(monday) {
 }
 
 function blankWeek(weekId) {
-  const days = {}, splits = {}, notes = {};
-  DAY_KEYS.forEach(k => { days[k] = []; splits[k] = []; notes[k] = ''; });
-  return { weekId, days, splits, notes };
+  const days = {}, notes = {};
+  DAY_KEYS.forEach(k => { days[k] = []; notes[k] = ''; });
+  return { weekId, days, notes };
 }
 
 /* 저장이 막혀 있으면(사파리 사생활 모드·용량 초과) 알려야 한다.
@@ -527,8 +531,6 @@ function loadWeek(weekId) {
     const w = JSON.parse(raw);
     const week = blankWeek(weekId);
     DAY_KEYS.forEach(k => {
-      const sp = w.splits && Array.isArray(w.splits[k]) ? w.splits[k] : [];
-      week.splits[k] = sp.slice(0, MAX_SPLITS).map(v => v | 0);
       week.notes[k] = w.notes && typeof w.notes[k] === 'string' ? w.notes[k] : '';
       const list = w.days && Array.isArray(w.days[k]) ? w.days[k] : [];
       week.days[k] = list.map(it => ({
@@ -561,34 +563,47 @@ function saveWeek(week) {
 const BACKUP_KIND = 'clear-week-backup';
 const WEEK_ID_RE = /^\d{4}-W\d{2}$/;
 
+/* 주 하나가 깨져 있어도 나머지는 살려서 내보낸다.
+   백업이 조용히 잘린 채 "성공"이라고 말하면 백업이 아니다. */
 function collectWeeks() {
   const weeks = {};
-  try {
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
-      if (!k || k.indexOf(STORE_PREFIX) !== 0) continue;
-      const id = k.slice(STORE_PREFIX.length);
-      if (!WEEK_ID_RE.test(id)) continue;
-      weeks[id] = JSON.parse(localStorage.getItem(k));
-    }
-  } catch (e) { Store.fail(); }
-  return weeks;
+  let broken = 0, n = 0;
+  try { n = localStorage.length; }
+  catch (e) { Store.fail(); return { weeks, broken }; }
+
+  for (let i = 0; i < n; i++) {
+    let key = null, raw = null;
+    try {
+      key = localStorage.key(i);
+      if (!key || key.indexOf(STORE_PREFIX) !== 0) continue;
+      raw = localStorage.getItem(key);
+    } catch (e) { Store.fail(); continue; }     // 읽기가 막힌 것과
+    const id = key.slice(STORE_PREFIX.length);
+    if (!WEEK_ID_RE.test(id)) continue;
+    try { weeks[id] = JSON.parse(raw); }
+    catch (e) { broken++; }                      // 값이 깨진 것은 다르다
+  }
+  return { weeks, broken };
 }
 
 function backupFile() {
-  const weeks = collectWeeks();
+  const { weeks, broken } = collectWeeks();
   const body = JSON.stringify({
     kind: BACKUP_KIND, version: 1,
     savedAt: new Date().toISOString(),
     weeks,
   });
-  const name = 'clear-week-' + new Date().toISOString().slice(0, 10) + '.json';
-  return { name, body, count: Object.keys(weeks).length };
+  /* 파일 이름은 화면에 적히는 날짜와 같아야 한다 — UTC가 아니라 이 자리의 날짜 */
+  const d = new Date();
+  const pad = v => String(v).padStart(2, '0');
+  const name = 'clear-week-' + d.getFullYear() + '-' +
+               pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + '.json';
+  return { name, body, count: Object.keys(weeks).length, broken };
 }
 
 async function exportBackup() {
-  const { name, body, count } = backupFile();
-  const done = count + '개 주 내보냄';
+  const { name, body, count, broken } = backupFile();
+  const done = count + '개 주 내보냄' + (broken ? ' · ' + broken + '개는 깨져서 빠짐' : '');
 
   /* 아이폰 사파리는 다운로드가 어정쩡해서 공유 시트를 먼저 쓴다 */
   if (typeof File === 'function' && navigator.canShare) {
@@ -614,13 +629,19 @@ function importBackup(text) {
   if (!data || data.kind !== BACKUP_KIND || !data.weeks || typeof data.weeks !== 'object') {
     return { error: 'Clear Week 백업 파일이 아님' };
   }
-  let added = 0, kept = 0;
+  let added = 0, kept = 0, broken = 0;
   const ids = Object.keys(data.weeks).filter(id => WEEK_ID_RE.test(id));
   for (const id of ids) {
+    const w = data.weeks[id];
+    /* 모양이 아닌 값을 넣으면 빈 주가 되고, 덮어쓰지 않는 규칙 때문에
+       나중에 제대로 된 백업을 가져와도 그 자리가 막힌다 */
+    if (!w || typeof w !== 'object' || !w.days || typeof w.days !== 'object') {
+      broken++; continue;
+    }
     const key = STORE_PREFIX + id;
     try {
       if (localStorage.getItem(key) !== null) { kept++; continue; }
-      localStorage.setItem(key, JSON.stringify(data.weeks[id]));
+      localStorage.setItem(key, JSON.stringify(w));
       added++;
     } catch (e) {
       Store.fail();
@@ -628,7 +649,7 @@ function importBackup(text) {
     }
   }
   if (!ids.length) return { error: '백업에 주가 없음' };
-  return { added, kept };
+  return { added, kept, broken };
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -815,7 +836,6 @@ class StrikeItem {
         p.longPress = null;
         p.mode = 'purge';               // 여기서 떼면 이 항목만, 끌면 훑은 것 전부
         p.purge = new Set([this]);
-        Gesture.purging = true;
         haptic(true);
         this.el.classList.add('purging');
       }, STROKE.longPressMs),
@@ -885,7 +905,6 @@ class StrikeItem {
     Sound.silence();
 
     if (p.mode === 'purge') {
-      Gesture.purging = false;
       const doomed = Array.from(p.purge);
       doomed.forEach(it => it.el.classList.remove('purging'));
       doomed.forEach(it => it.host.remove(it));
@@ -918,7 +937,6 @@ class StrikeItem {
     this.pointer = null;
     Sound.silence();
     if (p.mode === 'purge') {
-      Gesture.purging = false;
       p.purge.forEach(it => it.el.classList.remove('purging'));
     }
     if (p.mode === 'draw') this.rewind(p.active, () => { this.status = 'idle'; });
@@ -1183,274 +1201,6 @@ class StrikeItem {
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   6. 칸 나누기 — 한 칸 안에서 세로선을 그으면 열이 하나 늘어난다.
-      한 주가 한 화면에 고정돼 있으므로, 더 쓰고 싶으면 칸을 나눈다.
-   ═══════════════════════════════════════════════════════════════ */
-class CellSplits {
-  constructor(cell, bodyEl, seeds, host) {
-    this.cell = cell;
-    this.body = bodyEl;
-    this.seeds = seeds;          // 저장된 세로선 시드 배열 (길이 = 나눈 횟수)
-    this.host = host;            // { readOnly, save(), relayout() }
-    this.svg = document.createElementNS(NS, 'svg');
-    this.svg.setAttribute('class', 'split-svg');
-    cell.appendChild(this.svg);
-    this.lines = [];             // [{ el, x }]
-    this.pointer = null;
-
-    cell.addEventListener('pointerdown', e => this.onDown(e));
-    cell.addEventListener('pointermove', e => this.onMove(e));
-    cell.addEventListener('pointerup', e => this.onUp(e));
-    cell.addEventListener('pointercancel', () => this.onCancel());
-  }
-
-  get count() { return this.seeds.length; }
-
-  /* 열 경계 x 좌표 — 셀 기준 */
-  boundaryX(i) {
-    const cols = this.count + 1;
-    const gap = parseFloat(getComputedStyle(this.body).columnGap) || 12;
-    const bodyLeft = this.body.offsetLeft;
-    const w = this.body.clientWidth;
-    const colW = (w - gap * (cols - 1)) / cols;
-    return bodyLeft + (i + 1) * colW + i * gap + gap / 2;
-  }
-
-  /* 열 수를 반영한다. 확정된 선은 손그림이 아니라 표의 얇은 실선. */
-  layout() {
-    this.cell.dataset.splits = String(this.count);   /* 글씨 크기가 여기에 따라간다 */
-    this.body.style.columnCount = String(this.count + 1);
-    this.lines.forEach(l => l.el.remove());
-    this.lines = [];
-    const h = this.cell.clientHeight;
-    this.seeds.forEach((seed, i) => {
-      const x = Math.round(this.boundaryX(i));
-      const el = document.createElementNS(NS, 'rect');
-      el.setAttribute('x', String(x));
-      el.setAttribute('y', '0');
-      el.setAttribute('width', '1');
-      el.setAttribute('height', String(h));
-      el.setAttribute('shape-rendering', 'crispEdges');
-      el.style.fill = 'var(--rule)';      /* 다른 칸 구분선과 같은 색·굵기 */
-      this.svg.appendChild(el);
-      this.lines.push({ el, x, seed });
-    });
-  }
-
-  /* 마지막 단에 항목이 남아 있으면 선을 지울 수 없다 */
-  lastColumnBusy() {
-    if (!this.count) return false;
-    const left = this.cell.getBoundingClientRect().left;
-    const edge = this.boundaryX(this.count - 1);
-    return Array.from(this.body.querySelectorAll('.item')).some(
-      el => el.getBoundingClientRect().left - left > edge);
-  }
-
-  /* 지울 수 없을 때 — 선이 잠깐 흔들려 거절을 알린다 */
-  refuse(line) {
-    const x0 = parseFloat(line.el.getAttribute('x'));
-    const t0 = performance.now();
-    const step = now => {
-      const t = (now - t0) / 170;
-      if (t >= 1) { line.el.setAttribute('x', String(x0)); return; }
-      line.el.setAttribute('x', String(x0 + Math.sin(t * Math.PI * 3) * 2));
-      requestAnimationFrame(step);
-    };
-    requestAnimationFrame(step);
-  }
-
-  lineAt(x) {
-    let best = null, bd = Infinity;
-    for (const l of this.lines) {
-      const d = Math.abs(x - l.x);
-      if (d < bd) { bd = d; best = l; }
-    }
-    return best && bd <= 22 ? best : null;
-  }
-
-  /* ── 제스처 ──────────────────────────────────────────────── */
-  onDown(e) {
-    if (this.host.readOnly || this.pointer || this.busy || Gesture.purging) return;
-    if (e.target.closest('.cell-gutter')) return;   // 라벨 쪽 제스처는 건드리지 않는다
-    const rect = this.cell.getBoundingClientRect();
-    this.pointer = {
-      id: e.pointerId, rect,
-      startX: e.clientX, startY: e.clientY,
-      lastX: e.clientX,
-      mode: null,               // null | split | rub | pass
-      seed: 0, active: null, minY: 0, maxY: 0,
-      dirX: 0, reversals: 0, rubbed: 0, from: 0,
-    };
-
-    /* 세로선을 꾹 누르면 삭제 */
-    const grabbed = this.lineAt(e.clientX - rect.left);
-    if (grabbed) {
-      this.pointer.longPress = setTimeout(() => {
-        this.pointer = null;
-        if (this.lastColumnBusy()) { this.refuse(grabbed); return; }
-        haptic(true);
-        const i = this.lines.indexOf(grabbed);
-        if (i >= 0) this.seeds.splice(i, 1);
-        this.host.save();
-        this.host.relayout();
-      }, SPLIT.longPressMs);
-    }
-  }
-
-  onMove(e) {
-    const p = this.pointer;
-    if (!p || e.pointerId !== p.id) return;
-    if (Gesture.purging) { this.onCancel(); return; }   // 항목 훑어 지우는 중
-    const dx = e.clientX - p.startX;
-    const dy = e.clientY - p.startY;
-    const stepX = e.clientX - p.lastX;
-
-    if (p.longPress && Math.hypot(dx, dy) > 10) {
-      clearTimeout(p.longPress); p.longPress = null;
-    }
-
-    if (!p.mode) {
-      if (Math.max(Math.abs(dx), Math.abs(dy)) < SPLIT.slopPx) { p.lastX = e.clientX; return; }
-      if (Math.abs(dy) > Math.abs(dx)) {
-        p.mode = this.count < MAX_SPLITS ? 'split' : 'pass';
-        if (p.mode === 'split') this.beginSplit(p, e);
-      } else {
-        const line = this.lineAt(p.startX - p.rect.left);
-        if (line && this.lastColumnBusy()) { this.refuse(line); p.mode = 'pass'; }
-        else if (line) { p.mode = 'rub'; p.line = line; }
-        else { p.mode = 'pass'; }
-      }
-    }
-
-    if (p.mode === 'split') this.trackSplit(p, e);
-    else if (p.mode === 'rub') this.trackRub(p, stepX);
-    p.lastX = e.clientX;
-  }
-
-  onUp(e) {
-    const p = this.pointer;
-    if (!p || e.pointerId !== p.id) return;
-    if (p.longPress) clearTimeout(p.longPress);
-    this.pointer = null;
-    Sound.silence();
-    if (p.mode === 'split') this.finishSplit(p);
-    else if (p.mode === 'rub' && p.line && p.progress > 0 && p.progress < 1) {
-      p.line.el.setAttribute('opacity', '1');
-    }
-  }
-
-  onCancel() {
-    const p = this.pointer;
-    if (!p) return;
-    if (p.longPress) clearTimeout(p.longPress);
-    this.pointer = null;
-    Sound.silence();
-    if (p.mode === 'split' && p.active) this.rewind(p.active);
-  }
-
-  beginSplit(p, e) {
-    Sound.init(); Sound.resume();
-    p.seed = newSeed();
-    const el = document.createElementNS(NS, 'path');
-    el.setAttribute('fill', STROKE.inkColor);
-    el.setAttribute('fill-opacity', '0.88');
-    this.svg.appendChild(el);
-    p.active = el;
-    p.x = p.startX - p.rect.left;
-    p.minY = p.maxY = p.startY - p.rect.top;
-  }
-
-  trackSplit(p, e) {
-    const y = e.clientY - p.rect.top;
-    p.minY = Math.min(p.minY, y);
-    p.maxY = Math.max(p.maxY, y);
-    p.active.setAttribute('d',
-      buildVPathD(makeVPoints(p.seed, p.x, p.minY, p.maxY)));
-    Sound.scratch(0.6);
-  }
-
-  finishSplit(p) {
-    const h = Math.max(1, p.rect.height);
-    if ((p.maxY - p.minY) / h < SPLIT.commitRatio) { this.rewind(p.active); return; }
-
-    /* 확정 — 선이 열 경계로 자리잡고 칸이 나뉜다 */
-    this.busy = true;
-    haptic(STROKE.hapticOnCommit);
-    this.seeds.push(p.seed);
-    this.host.save();
-
-    const targetX = this.boundaryX(this.seeds.length - 1);
-    const cellH = this.cell.clientHeight;
-    const fromX = p.x, fromTop = p.minY, fromBot = p.maxY;
-    const t0 = performance.now();
-    const step = now => {
-      const t = easeOut(clamp((now - t0) / SPLIT.settleMs, 0, 1));
-      const x = fromX + (targetX - fromX) * t;
-      const y0 = fromTop + (0 - fromTop) * t;
-      const y1 = fromBot + (cellH - fromBot) * t;
-      p.active.setAttribute('d', buildVPathD(makeVPoints(p.seed, x, y0, y1)));
-      if (t < 1) requestAnimationFrame(step);
-      else this.handoff(p.active);
-    };
-    requestAnimationFrame(step);
-  }
-
-  /* 손으로 그은 획이 옅어지며 사라지고, 그 자리에 표의 선이 놓인다 */
-  handoff(ink) {
-    this.busy = false;
-    this.host.relayout();          // 열 수 반영 + 항목 재배치 + 획 복원
-    const t0 = performance.now();
-    const step = now => {
-      const t = clamp((now - t0) / SPLIT.handoffMs, 0, 1);
-      ink.setAttribute('opacity', String(1 - t));
-      if (t < 1) requestAnimationFrame(step);
-      else ink.remove();
-    };
-    requestAnimationFrame(step);
-  }
-
-  rewind(el) {
-    if (!el) return;
-    const d = el.getAttribute('d');
-    const t0 = performance.now();
-    const step = now => {
-      const t = clamp((now - t0) / SPLIT.rewindMs, 0, 1);
-      el.setAttribute('opacity', String(1 - t));
-      if (t < 1) requestAnimationFrame(step);
-      else el.remove();
-    };
-    if (d) requestAnimationFrame(step); else el.remove();
-  }
-
-  /* 세로선을 문대면 열이 합쳐진다 */
-  trackRub(p, stepX) {
-    if (stepX !== 0) {
-      const dir = stepX > 0 ? 1 : -1;
-      if (dir !== p.dirX) {
-        p.dirX = dir;
-        p.reversals++;
-        if (p.reversals === SPLIT.rubReversals) p.from = p.rubbed;
-      }
-    }
-    p.rubbed += Math.abs(stepX);
-    Sound.init(); Sound.resume(); Sound.scratch(0.6);
-    if (p.reversals < SPLIT.rubReversals) return;
-
-    p.progress = clamp((p.rubbed - p.from) / SPLIT.rubDistance, 0, 1);
-    p.line.el.setAttribute('opacity', String(1 - p.progress));
-    if (p.progress >= 1) {
-      this.pointer = null;
-      Sound.silence();
-      haptic(ERASE.hapticOnErase);
-      const i = this.lines.indexOf(p.line);
-      if (i >= 0) this.seeds.splice(i, 1);
-      this.host.save();
-      this.host.relayout();
-    }
-  }
-}
-
-/* ═══════════════════════════════════════════════════════════════
    7. 화면 — 왼쪽 7칸 + 오른쪽 note. 한 주가 한 화면에 고정.
    ═══════════════════════════════════════════════════════════════ */
 const App = {
@@ -1602,13 +1352,7 @@ const App = {
       return item;
     });
 
-    const splits = new CellSplits(section, listEl, this.week.splits[key], {
-      readOnly: this.readOnly,
-      save: () => this.save(),
-      relayout: () => this.relayoutCell(key),
-    });
-
-    this.cells[key] = { section, listEl, items, splits, sub, mark: null };
+    this.cells[key] = { section, listEl, items, sub, mark: null };
     return section;
   },
 
@@ -1626,8 +1370,21 @@ const App = {
     if (!cell) return;
     cell.listEl.scrollLeft = 0;      // 입력 중 밀려 있던 가로 위치를 되돌린다
     cell.listEl.scrollTop = 0;
-    cell.splits.layout();
+    applyColumns(cell.section, cell.listEl, key, cell.items.length);
     cell.items.forEach(item => { item.clearStrokes(); item.restore(); });
+    this.updateOverflow(key);
+  },
+
+  /* 항목이 늘거나 줄면 열 수가 바뀔 수 있다. 바뀌면 글씨 크기도 바뀌므로
+     그 칸의 획을 다시 그린다. */
+  refreshCell(key) {
+    const cell = this.cells[key];
+    if (!cell) return;
+    const before = cell.listEl.style.columnCount;
+    applyColumns(cell.section, cell.listEl, key, cell.items.length);
+    if (cell.listEl.style.columnCount !== before) {
+      cell.items.forEach(item => { item.clearStrokes(); item.restore(); });
+    }
     this.updateOverflow(key);
   },
 
@@ -1706,7 +1463,9 @@ const App = {
       reader.readAsText(f);
     });
 
-    /* 열려 있는 동안 딴 데를 누르면 닫힌다 */
+    /* 열려 있는 동안 딴 데를 누르면 닫힌다.
+       캡처 단계에서 닫아야 한다 — 항목이 pointerdown에서 자기 위치를 재는데,
+       그 뒤에 줄이 닫히면 화면이 밀려 방금 잰 값이 어긋난다. */
     this.closeBackupOutside = e => {
       if (bar.contains(e.target) || e.target === title) return;
       this.toggleBackup(false);
@@ -1719,10 +1478,12 @@ const App = {
     if (open === !bar.hidden) return;
     bar.hidden = !open;
     this.backupMsg('');
-    if (open) setTimeout(() => document.addEventListener('pointerdown', this.closeBackupOutside), 0);
-    else document.removeEventListener('pointerdown', this.closeBackupOutside);
-    /* 줄이 하나 늘고 줄면 칸 높이가 바뀐다 — 열 경계와 획을 다시 맞춘다 */
-    requestAnimationFrame(() => this.relayoutAll());
+    const opts = { capture: true };
+    if (open) setTimeout(() => document.addEventListener('pointerdown', this.closeBackupOutside, opts), 0);
+    else document.removeEventListener('pointerdown', this.closeBackupOutside, opts);
+    /* 줄이 하나 늘고 줄면 칸 높이가 바뀐다 — 획을 그 자리에서 다시 맞춘다.
+       다음 프레임으로 미루면 그 사이에 시작된 긋기가 지워진다. */
+    this.relayoutAll();
   },
 
   backupMsg(text) { document.getElementById('backupMsg').textContent = text || ''; },
@@ -1749,7 +1510,7 @@ const App = {
       input.remove();
       listEl.scrollLeft = 0;         // 넘친 항목은 칸을 나눠야 보인다
       listEl.scrollTop = 0;
-      this.updateOverflow(dayKey);
+      this.refreshCell(dayKey);
     };
 
     /* 적힌 것이 있으면 항목으로 확정한다. 엔터로도, 딴 데를 눌러도 같다. */
@@ -1768,7 +1529,7 @@ const App = {
       listEl.insertBefore(item.el, input);    // 입력창은 늘 목록 맨 아래
       if (this.cells[dayKey]) this.cells[dayKey].items.push(item);
       item.restore();
-      this.updateOverflow(dayKey);            // 방금 적은 것이 칸 밖으로 밀렸을 수 있다
+      this.refreshCell(dayKey);               // 항목이 늘면 열이 늘고, 남으면 잘렸다고 표시된다
       input.value = '';                       // 다음 줄 입력창이 바로 이어짐
       return true;
     };
@@ -1841,7 +1602,7 @@ const App = {
       item.textEl.textContent = text;
       this.save();
       item.el.hidden = false;                 // 제자리에 그대로 둔다
-      this.updateOverflow(dayKey);
+      this.refreshCell(dayKey);
     };
 
     input.addEventListener('keydown', e => {
@@ -1867,7 +1628,7 @@ const App = {
     if (cell) {
       const j = cell.items.indexOf(item);
       if (j >= 0) cell.items.splice(j, 1);
-      this.updateOverflow(dayKey);
+      this.refreshCell(dayKey);
     }
   },
 };
