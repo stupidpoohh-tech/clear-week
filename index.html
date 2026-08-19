@@ -33,7 +33,7 @@
 
     /* 한 화면에 한 주가 다 들어가야 하므로 행은 촘촘하게 */
     --item-height: 26px;       /* 항목 한 줄 높이 */
-    --label-w: 52px;           /* 날짜 라벨이 차지하는 왼쪽 폭 = 들여쓰기 기준 */
+    --label-w: 38px;           /* 날짜 라벨이 차지하는 왼쪽 폭 = 들여쓰기 기준 */
     --col-gap: 12px;           /* 셀을 나눴을 때 열 사이 간격 */
 
     /* 오른쪽 자유 칸 — 종이 플래너의 우측 여백 */
@@ -420,15 +420,15 @@ const SPLIT = {
 const SUBLABEL = {
   pullDownPx: 14,      // 이만큼 아래로 끌면 메모 입력이 열린다
 };
-const DAY_SHORT = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+const DAY_INITIAL = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
 
-/* 칸 라벨 — 요일 칸은 "20.thu", 8번째 칸은 note */
+/* 칸 라벨 — 요일 칸은 "20.T", 8번째 칸은 note */
 function cellLabel(key, monday) {
   if (key === 'free') return 'note';
-  const i = DAY_SHORT.indexOf(key);
+  const i = WEEK_DAYS.indexOf(key);
   const d = new Date(monday);
   d.setDate(d.getDate() + i);
-  return d.getDate() + '.' + DAY_SHORT[i];
+  return d.getDate() + '.' + DAY_INITIAL[i];
 }
 
 function mondayOf(date) {
@@ -446,12 +446,12 @@ function isoWeekId(monday) {
   return t.getUTCFullYear() + '-W' + String(week).padStart(2, '0');
 }
 
-/* "8.17-8.23" — 그 주의 월요일부터 일요일까지 */
+/* "2026. 8.17-8.23" — 연도는 맨 앞에 적히는 월요일 기준 */
 function weekTitle(monday) {
   const end = new Date(monday);
   end.setDate(end.getDate() + 6);
   const fmt = d => (d.getMonth() + 1) + '.' + d.getDate();
-  return fmt(monday) + '-' + fmt(end);
+  return monday.getFullYear() + '. ' + fmt(monday) + '-' + fmt(end);
 }
 
 function blankWeek(weekId) {
