@@ -27,9 +27,13 @@
     --free-font: 9.5pt;
     --sublabel-font: 6.5pt;    /* 요일 아래 작은 메모 */
 
+    /* 칸을 나눌수록 그 칸의 글씨와 행이 작아진다 — 좁아진 칸에 작게 쓰듯 */
+    --split-scale-1: 0.84;     /* 한 번 나눴을 때 */
+    --split-scale-2: 0.72;     /* 두 번 나눴을 때 */
+
     /* 한 화면에 한 주가 다 들어가야 하므로 행은 촘촘하게 */
     --item-height: 26px;       /* 항목 한 줄 높이 */
-    --label-w: 46px;           /* 요일 라벨이 차지하는 왼쪽 폭 = 들여쓰기 기준 */
+    --label-w: 52px;           /* 날짜 라벨이 차지하는 왼쪽 폭 = 들여쓰기 기준 */
     --col-gap: 12px;           /* 셀을 나눴을 때 열 사이 간격 */
 
     /* 오른쪽 자유 칸 — 종이 플래너의 우측 여백 */
@@ -88,13 +92,20 @@
     flex: 1 1 auto; min-height: 0;
     display: grid;
     grid-template-columns: 1fr var(--free-width);
+    border: 1px solid var(--rule);
+    border-top: none;                 /* 머리말 아래 선이 표의 윗선 */
   }
   .days {
     min-height: 0; min-width: 0;
     display: grid;
     grid-template-rows: repeat(7, 1fr);
   }
-  .free { min-height: 0; min-width: 0; border-left: 1px solid var(--rule); padding-left: 10px; }
+  .days .cell.day:last-child { border-bottom: none; }   /* 표 아랫선과 겹치지 않게 */
+  .free {
+    min-height: 0; min-width: 0;
+    border-left: 1px solid var(--rule);
+    padding: 0 8px 0 10px;
+  }
 
   /* ── 칸 ──────────────────────────────────────────────────── */
   .cell {
@@ -107,9 +118,14 @@
   .cell.day { flex-direction: row; border-bottom: 1px solid var(--rule); }
   .cell.free-cell { flex-direction: column; }
 
+  /* 나눈 횟수만큼 그 칸의 글씨·행이 작아진다 */
+  .cell { --fs: 1; }
+  .cell[data-splits="1"] { --fs: var(--split-scale-1); }
+  .cell[data-splits="2"] { --fs: var(--split-scale-2); }
+
   /* 라벨 = 살짝 누르면 항목 추가, 꾹 눌러 아래로 끌면 요일 아래 메모 */
   .cell-gutter { display: flex; flex-direction: column; min-width: 0; }
-  .cell.day > .cell-gutter { flex: 0 0 var(--label-w); align-self: flex-start; }
+  .cell.day > .cell-gutter { flex: 0 0 var(--label-w); align-self: flex-start; padding-left: 6px; }
   .cell.free-cell > .cell-gutter { flex: none; width: 100%; }
 
   .cell-label {
@@ -149,15 +165,15 @@
   /* ── 항목 ────────────────────────────────────────────────── */
   .item {
     position: relative;
-    min-height: var(--item-height);
+    min-height: calc(var(--item-height) * var(--fs));
     display: flex;
     align-items: center;
     padding: 3px 2px;
     break-inside: avoid;
     cursor: default;
   }
-  .item-text { font-size: var(--item-font); line-height: 1.45; overflow-wrap: anywhere; }
-  .free .item-text, .free .entry { font-size: var(--free-font); }
+  .item-text { font-size: calc(var(--item-font) * var(--fs)); line-height: 1.45; overflow-wrap: anywhere; }
+  .free .item-text, .free .entry { font-size: calc(var(--free-font) * var(--fs)); }
   .strike-svg {
     position: absolute; inset: 0;
     width: 100%; height: 100%;
@@ -182,8 +198,8 @@
   .entry {
     width: 100%;
     border: none; background: none; font: inherit;
-    font-size: var(--item-font); line-height: 1.45; color: var(--ink);
-    padding: 3px 2px; min-height: var(--item-height);
+    font-size: calc(var(--item-font) * var(--fs)); line-height: 1.45; color: var(--ink);
+    padding: 3px 2px; min-height: calc(var(--item-height) * var(--fs));
     -webkit-user-select: text; user-select: text;
   }
   .entry:focus { outline: none; }
@@ -1031,6 +1047,7 @@ class CellSplits {
 
   /* 열 수를 반영한다. 확정된 선은 손그림이 아니라 표의 얇은 실선. */
   layout() {
+    this.cell.dataset.splits = String(this.count);   /* 글씨 크기가 여기에 따라간다 */
     this.body.style.columnCount = String(this.count + 1);
     this.lines.forEach(l => l.el.remove());
     this.lines = [];
