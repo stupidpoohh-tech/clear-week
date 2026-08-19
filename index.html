@@ -44,7 +44,7 @@
   header .hint {
     margin-top: 6px;
     font-size: 12px;
-    line-height: 1.6;
+    line-height: 1.7;
     color: var(--ink-faint);
   }
   .list {
@@ -58,7 +58,7 @@
     align-items: center;
     padding: 12px 4px;
     border-bottom: 1px solid var(--rule);
-    touch-action: pan-y;     /* 세로 = 스크롤(브라우저), 가로 = 긋기(JS) */
+    touch-action: pan-y;     /* 세로 = 스크롤(브라우저), 가로 = 긋기/지우기(JS) */
     cursor: default;
   }
   .item-text {
@@ -78,7 +78,7 @@
   .item.pulse .strike-svg { animation: settle 120ms ease-out; }
   @keyframes settle {
     0%   { transform: scale(1, 1); }
-    40%  { transform: scale(1.01, 1.14); }
+    40%  { transform: scale(1.01, 1.12); }
     100% { transform: scale(1, 1); }
   }
   footer { margin-top: 28px; text-align: center; }
@@ -98,8 +98,11 @@
 <main>
   <header>
     <h1>Clear Week</h1>
-    <p class="hint">긋기 감각 데모 — 텍스트 위를 좌우로 드래그해서 긋기.<br>
-    더블탭 = 자동 긋기 · 그어진 항목을 길게 누르면(0.5초) 되돌리기.</p>
+    <p class="hint">
+      긋기 — 글자 위를 좌우로 드래그<br>
+      더블탭 — 자동으로 그어짐<br>
+      지우기 — 그어진 항목을 쓱싹쓱싹 문대기
+    </p>
   </header>
   <section class="list" id="list"></section>
   <footer><button id="reset" type="button">데모 초기화</button></footer>
@@ -109,31 +112,60 @@
 'use strict';
 
 /* ═══════════════════════════════════════════════════════════════
-   획 파라미터 — 손맛 튜닝은 전부 여기서.
+   1. 획 파라미터 — 손맛 튜닝은 전부 여기서.
    ═══════════════════════════════════════════════════════════════ */
 const STROKE = {
   /* ── 획 모양 ─────────────────────────────────────────────── */
-  noiseAmplitude: 1.8,   // 획 흔들림 진폭 (px)
-  noiseFrequency: 0.08,  // 흔들림 주기 (1/px). 클수록 잘게 떨림
+  noiseAmplitude: 0.9,   // 획 흔들림 진폭 (px). 올리면 더 삐뚤어짐
+  noiseFrequency: 0.018, // 흔들림 주기 (1/px). 올리면 잘게 지글거림
   widthMin: 1.6,         // 최소 굵기 (px) — 빠르게 그을 때
   widthMax: 3.2,         // 최대 굵기 (px) — 천천히 그을 때
   taperLen: 8,           // 양끝이 얇아지는 구간 길이 (px)
-  overshoot: 6,          // 확정 시 양끝 삐져나감 (px)
-  tiltMax: 0.035,        // 획 전체의 무작위 기울기 (dy/dx 최대값)
+  tiltMax: 0.02,         // 획 전체의 무작위 기울기 (dy/dx 최대값)
   followY: 0.25,         // 손가락 상하 움직임 반영 비율 (0=수평 고정, 1=그대로)
   speedRef: 1.4,         // 이 속도(px/ms)에서 굵기가 widthMin까지 얇아짐
-  widthNoise: 0.12,      // 굵기 자체의 미세 흔들림 비율
+  widthNoise: 0.06,      // 굵기 자체의 미세 흔들림 비율
+  widthNoiseFreq: 0.08,  // 굵기 흔들림 주기 (1/px)
   inkColor: '#26356b',   // 취소선 잉크색
 
-  /* ── 판정 · 피드백 ───────────────────────────────────────── */
+  /* ── 판정 ────────────────────────────────────────────────── */
   commitRatio: 0.6,      // 확정 임계값 (텍스트 폭 대비 통과 비율)
-  hapticOnCommit: true,  // 확정 시 진동 (navigator.vibrate — iOS 사파리는 무시)
   slopPx: 8,             // 긋기 vs 스크롤 초기 방향 판정 이동량 (px)
-  longPressMs: 500,      // 되돌리기 롱프레스 시간 (ms)
   doubleTapMs: 300,      // 더블탭 판정 간격 (ms)
-  commitMs: 130,         // 확정 시 양끝 확장 애니메이션 (ms)
-  rewindMs: 200,         // 미달/되돌리기 시 선이 되감기는 시간 (ms)
-  autoStrokeMs: 280,     // 더블탭 자동 긋기 시간 (ms)
+  hapticOnCommit: true,  // 확정 시 진동 (iOS 사파리는 지원 안 함 → 무시됨)
+
+  /* ── 손으로 그은 획은 그은 만큼만 남는다 ─────────────────── */
+  //  확정돼도 손가락이 지나간 구간 밖으로는 늘어나지 않음.
+
+  /* ── 자동으로 그어지는 획 (감긴 나머지 줄, 더블탭) ───────── */
+  strikeAllLines: true,  // 두 줄 이상 감긴 항목은 나머지 줄도 자동으로 긋기
+  overshoot: 2,          // 자동 획이 텍스트 밖으로 삐져나가는 양 (px)
+  autoStrokeMs: 220,     // 자동 획 하나가 그어지는 시간 (ms)
+  autoStagger: 70,       // 줄과 줄 사이 시차 (ms)
+
+  /* ── 애니메이션 ──────────────────────────────────────────── */
+  rewindMs: 200,         // 임계값 미달 시 선이 되감기는 시간 (ms)
+  restoreMs: 160,        // 지우다 만 획이 되살아나는 시간 (ms)
+};
+
+/* ── 문대서 지우기 ─────────────────────────────────────────── */
+const ERASE = {
+  minReversals: 3,       // 좌우 방향이 몇 번 바뀌면 '문지르기'로 판정
+  minSegment: 6,         // 방향 전환으로 인정할 최소 이동 거리 (px)
+  rubDistance: 320,      // 판정 후 이만큼 더 문대면 완전히 지워짐 (px)
+  hapticOnErase: true,
+};
+
+/* ── 사각사각 소리 ─────────────────────────────────────────── */
+const SOUND = {
+  enabled: true,
+  volume: 0.35,          // 최대 음량 (0~1)
+  bandHz: 1900,          // 사각거림의 중심 주파수 (Hz). 낮추면 둔탁해짐
+  bandQ: 0.9,            // 필터 폭. 올리면 더 '쉭' 하는 소리
+  speedRef: 1.0,         // 이 속도(px/ms)에서 음량 최대
+  floor: 0.25,           // 아주 느리게 그어도 유지되는 최소 음량 비율
+  attackMs: 10,
+  releaseMs: 80,
 };
 
 /* ── 더미 항목 (1단계: 긋기 감각 테스트용) ─────────────────── */
@@ -146,8 +178,14 @@ const DEMO_ITEMS = [
 ];
 
 /* ═══════════════════════════════════════════════════════════════
-   유틸
+   2. 유틸
    ═══════════════════════════════════════════════════════════════ */
+const NS = 'http://www.w3.org/2000/svg';
+const TAU = Math.PI * 2;
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+const easeOut = t => 1 - (1 - t) * (1 - t);
+const easeIn = t => t * t;
+
 function mulberry32(seed) {
   let a = seed >>> 0;
   return function () {
@@ -157,33 +195,24 @@ function mulberry32(seed) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
-const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
-const lerp = (a, b, t) => a + (b - a) * t;
-const easeOut = t => 1 - (1 - t) * (1 - t);
-const easeIn = t => t * t;
 
-/* 획 하나의 결(노이즈·기울기·굵기 흔들림)을 시드에서 만든다 */
+/* 획 하나의 결(흔들림·기울기·굵기 요동)을 시드에서 만든다 */
 function makeGrain(seed) {
   const rnd = mulberry32(seed);
-  const p1 = rnd() * Math.PI * 2;
-  const p2 = rnd() * Math.PI * 2;
-  const p3 = rnd() * Math.PI * 2;
+  const p1 = rnd() * TAU, p2 = rnd() * TAU, p3 = rnd() * TAU;
   const tilt = (rnd() * 2 - 1) * STROKE.tiltMax;
-  const f = STROKE.noiseFrequency * Math.PI * 2;
+  const f = STROKE.noiseFrequency * TAU;
+  const fw = STROKE.widthNoiseFreq * TAU;
   return {
     tilt,
-    noise(x) {
-      return STROKE.noiseAmplitude *
-        (0.62 * Math.sin(x * f + p1) + 0.38 * Math.sin(x * f * 2.7 + p2));
-    },
-    widthJitter(x) {
-      return 1 + STROKE.widthNoise * Math.sin(x * 0.9 + p3);
-    },
+    noise: x => STROKE.noiseAmplitude *
+      (0.7 * Math.sin(x * f + p1) + 0.3 * Math.sin(x * f * 2.3 + p2)),
+    widthJitter: x => 1 + STROKE.widthNoise * Math.sin(x * fw + p3),
   };
 }
 
 /* 점 배열 → 굵기 변화가 있는 채움 패스(d).
-   fraction < 1 이면 앞에서부터 그만큼만 그린다(되감기/자동긋기용). */
+   fraction < 1 이면 앞에서부터 그만큼만 그린다 (자라남 / 되감김). */
 function buildPathD(points, fraction = 1) {
   const n = Math.max(0, Math.round(points.length * clamp(fraction, 0, 1)));
   if (n < 2) return '';
@@ -200,59 +229,121 @@ function buildPathD(points, fraction = 1) {
   for (let i = 0; i < pts.length; i++) {
     const p = pts[i];
     const taper = clamp(Math.min(dist[i], total - dist[i]) / STROKE.taperLen, 0, 1);
-    const eased = Math.sqrt(taper);                 // 끝은 얇게, 하지만 0은 아니게
-    const h = Math.max(0.3, p.w * (0.3 + 0.7 * eased)) / 2;
-    top.push(`${p.x.toFixed(1)},${(p.y - h).toFixed(1)}`);
-    bot.push(`${p.x.toFixed(1)},${(p.y + h).toFixed(1)}`);
+    const h = Math.max(0.3, p.w * (0.3 + 0.7 * Math.sqrt(taper))) / 2;
+    top.push(p.x.toFixed(1) + ',' + (p.y - h).toFixed(1));
+    bot.push(p.x.toFixed(1) + ',' + (p.y + h).toFixed(1));
   }
   bot.reverse();
-  return `M${top.join('L')}L${bot.join('L')}Z`;
+  return 'M' + top.join('L') + 'L' + bot.join('L') + 'Z';
 }
 
-/* span 안에서 clientY가 걸친 줄(line box)의 사각형 — 두 줄 감김 대응 */
-function lineRectAt(span, clientY) {
+/* span이 차지한 줄(line box)들의 사각형 — 두 줄 이상 감김 대응 */
+function lineRects(span) {
   const range = document.createRange();
   range.selectNodeContents(span);
-  const rects = Array.from(range.getClientRects()).filter(r => r.width > 0);
-  if (!rects.length) return span.getBoundingClientRect();
-  let best = rects[0], bestDist = Infinity;
-  for (const r of rects) {
-    if (clientY >= r.top && clientY <= r.bottom) return r;
+  return Array.from(range.getClientRects()).filter(r => r.width > 1 && r.height > 1);
+}
+
+function lineIndexAt(rects, clientY) {
+  let best = 0, bestDist = Infinity;
+  for (let i = 0; i < rects.length; i++) {
+    const r = rects[i];
+    if (clientY >= r.top && clientY <= r.bottom) return i;
     const d = Math.min(Math.abs(clientY - r.top), Math.abs(clientY - r.bottom));
-    if (d < bestDist) { bestDist = d; best = r; }
+    if (d < bestDist) { bestDist = d; best = i; }
   }
   return best;
 }
 
-function haptic() {
-  if (STROKE.hapticOnCommit && navigator.vibrate) navigator.vibrate(12);
+function haptic(on) {
+  if (on && navigator.vibrate) navigator.vibrate(12);
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   항목 하나 = StrikeItem. 긋기/되감기/롱프레스/더블탭 전부 담당.
+   3. 사각사각 소리 — 필터를 통과시킨 노이즈의 음량을 손 속도로 조절
+   ═══════════════════════════════════════════════════════════════ */
+const Sound = {
+  ctx: null, gain: null, filter: null,
+
+  init() {
+    if (this.ctx || !SOUND.enabled) return;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    this.ctx = new AC();
+
+    const len = Math.floor(this.ctx.sampleRate * 2);
+    const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    let brown = 0;
+    for (let i = 0; i < len; i++) {
+      const w = Math.random() * 2 - 1;
+      brown = (brown + 0.02 * w) / 1.02;      // 종이 특유의 저역 성분
+      d[i] = clamp(w * 0.75 + brown * 2.5, -1, 1);
+    }
+
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    src.loop = true;
+
+    this.filter = this.ctx.createBiquadFilter();
+    this.filter.type = 'bandpass';
+    this.filter.frequency.value = SOUND.bandHz;
+    this.filter.Q.value = SOUND.bandQ;
+
+    this.gain = this.ctx.createGain();
+    this.gain.gain.value = 0;
+
+    src.connect(this.filter);
+    this.filter.connect(this.gain);
+    this.gain.connect(this.ctx.destination);
+    src.start();
+  },
+
+  resume() {
+    if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume();
+  },
+
+  /* speed: px/ms */
+  scratch(speed) {
+    if (!this.ctx || !SOUND.enabled) return;
+    const s = clamp(speed / SOUND.speedRef, 0, 1);
+    const level = (SOUND.floor + (1 - SOUND.floor) * s) * SOUND.volume;
+    const now = this.ctx.currentTime;
+    this.gain.gain.setTargetAtTime(level, now, SOUND.attackMs / 1000);
+    this.filter.frequency.setTargetAtTime(SOUND.bandHz * (0.85 + 0.4 * s), now, 0.02);
+  },
+
+  silence() {
+    if (!this.ctx) return;
+    this.gain.gain.setTargetAtTime(0, this.ctx.currentTime, SOUND.releaseMs / 1000);
+  },
+};
+
+/* ═══════════════════════════════════════════════════════════════
+   4. 항목 하나 = StrikeItem
+      상태: idle → (긋기) → struck → (문대기) → idle
    ═══════════════════════════════════════════════════════════════ */
 class StrikeItem {
   constructor(text, container) {
     this.el = document.createElement('div');
     this.el.className = 'item';
+
     this.textEl = document.createElement('span');
     this.textEl.className = 'item-text';
     this.textEl.textContent = text;
-    this.svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+
+    this.svg = document.createElementNS(NS, 'svg');
     this.svg.setAttribute('class', 'strike-svg');
-    this.path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    this.path.setAttribute('fill', STROKE.inkColor);
-    this.svg.appendChild(this.path);
+
     this.el.appendChild(this.textEl);
     this.el.appendChild(this.svg);
     container.appendChild(this.el);
 
-    this.status = 'idle';        // idle | drawing | struck | animating
-    this.points = [];
-    this.grain = null;
-    this.anim = null;            // 진행 중 rAF id
-
-    this.pointer = null;         // 현재 제스처 상태
+    this.status = 'idle';       // idle | drawing | struck | animating
+    this.strokes = [];          // [{ el, points }]
+    this.active = null;         // 지금 손으로 그리는 중인 획
+    this.anim = null;
+    this.pointer = null;
     this.lastTapAt = 0;
 
     this.el.addEventListener('pointerdown', e => this.onDown(e));
@@ -262,59 +353,107 @@ class StrikeItem {
     this.el.addEventListener('contextmenu', e => e.preventDefault());
   }
 
-  /* ── 제스처 판정 ─────────────────────────────────────────── */
+  /* ── 획 관리 ─────────────────────────────────────────────── */
+  addStroke() {
+    const el = document.createElementNS(NS, 'path');
+    el.setAttribute('fill', STROKE.inkColor);
+    this.svg.appendChild(el);
+    const s = { el, points: [] };
+    this.strokes.push(s);
+    return s;
+  }
+
+  clearStrokes() {
+    this.strokes.forEach(s => s.el.remove());
+    this.strokes = [];
+    this.active = null;
+  }
+
+  draw(s, fraction = 1) { s.el.setAttribute('d', buildPathD(s.points, fraction)); }
+  setOpacity(v) { this.strokes.forEach(s => s.el.setAttribute('fill-opacity', v)); }
+
+  animate(ms, fn, done) {
+    if (this.anim) cancelAnimationFrame(this.anim);
+    const t0 = performance.now();
+    const step = now => {
+      const t = clamp((now - t0) / ms, 0, 1);
+      fn(t);
+      if (t < 1) this.anim = requestAnimationFrame(step);
+      else { this.anim = null; if (done) done(); }
+    };
+    this.anim = requestAnimationFrame(step);
+  }
+
+  /* ── 제스처 ──────────────────────────────────────────────── */
   onDown(e) {
     if (this.status === 'animating' || this.pointer) return;
+    Sound.init();
+    Sound.resume();
     this.el.setPointerCapture(e.pointerId);
-    const rowRect = this.el.getBoundingClientRect();
     this.pointer = {
       id: e.pointerId,
-      rowRect,
+      rowRect: this.el.getBoundingClientRect(),
       startX: e.clientX, startY: e.clientY,
-      lastX: e.clientX, lastY: e.clientY,
-      lastT: e.timeStamp,
-      moved: 0,
-      drawing: false,
-      longPress: null,
+      lastX: e.clientX, lastY: e.clientY, lastT: e.timeStamp,
+      moved: 0, speed: 0,
+      mode: null,                       // null | draw | erase | scroll
+      dir: 0, seg: 0, reversals: 0,     // 문지르기 판정
+      rubbed: 0, eraseFrom: 0, progress: 0,
     };
-    if (this.status === 'struck') {
-      this.pointer.longPress = setTimeout(() => {
-        this.pointer = null;
-        this.rewind(() => { this.status = 'idle'; });
-      }, STROKE.longPressMs);
-    }
   }
 
   onMove(e) {
     const p = this.pointer;
     if (!p || e.pointerId !== p.id) return;
+
+    const step = e.clientX - p.lastX;
+    const dt = Math.max(1, e.timeStamp - p.lastT);
+    p.speed = p.speed * 0.75 + (Math.abs(step) / dt) * 0.25;
+
     const dx = e.clientX - p.startX;
     const dy = e.clientY - p.startY;
     p.moved = Math.max(p.moved, Math.hypot(dx, dy));
 
-    if (p.longPress && p.moved > 10) {   // 움직이면 롱프레스 취소
-      clearTimeout(p.longPress);
-      p.longPress = null;
+    if (!p.mode) {
+      if (Math.abs(dx) >= STROKE.slopPx) {
+        if (Math.abs(dx) <= Math.abs(dy)) {
+          p.mode = 'scroll';                 // 세로 우세 → 브라우저 스크롤에 양보
+        } else if (this.status === 'struck') {
+          p.mode = 'erase';
+        } else if (this.status === 'idle') {
+          p.mode = 'draw';
+          this.beginDraw(p);
+        } else {
+          p.mode = 'scroll';
+        }
+      }
     }
 
-    if (!p.drawing) {
-      if (this.status !== 'idle') return;
-      if (Math.abs(dx) < STROKE.slopPx) return;
-      if (Math.abs(dx) <= Math.abs(dy)) return;   // 세로 우세 → 스크롤에 양보
-      this.beginDraw(p, e);
+    if (p.mode === 'draw') {
+      this.addSample(p, e.clientX, e.clientY);
+      Sound.scratch(p.speed);
+    } else if (p.mode === 'erase') {
+      this.trackRub(p, step);
+      Sound.scratch(p.speed);
     }
-    if (p.drawing) this.addSample(e.clientX, e.clientY, e.timeStamp);
+
+    p.lastX = e.clientX; p.lastY = e.clientY; p.lastT = e.timeStamp;
   }
 
   onUp(e) {
     const p = this.pointer;
     if (!p || e.pointerId !== p.id) return;
-    if (p.longPress) { clearTimeout(p.longPress); p.longPress = null; }
     this.pointer = null;
+    Sound.silence();
 
-    if (p.drawing) { this.finishDraw(p); return; }
+    if (p.mode === 'draw') { this.finishDraw(p); return; }
 
-    /* 탭 → 더블탭 판정 (idle 항목만) */
+    if (p.mode === 'erase') {
+      if (p.progress > 0 && p.progress < 1) this.restore();
+      return;
+    }
+
+    /* 탭 → 더블탭 판정 */
     if (this.status === 'idle' && p.moved < 10) {
       const now = e.timeStamp;
       if (now - this.lastTapAt < STROKE.doubleTapMs) {
@@ -326,207 +465,219 @@ class StrikeItem {
     }
   }
 
-  onCancel() {   // 브라우저가 세로 스크롤을 가져감
+  onCancel() {
     const p = this.pointer;
     if (!p) return;
-    if (p.longPress) clearTimeout(p.longPress);
     this.pointer = null;
-    if (p.drawing) this.rewind(() => { this.status = 'idle'; });
+    Sound.silence();
+    if (p.mode === 'draw') this.rewind(() => { this.status = 'idle'; });
+    else if (p.mode === 'erase' && p.progress > 0) this.restore();
   }
 
-  /* ── 긋기 본체 ───────────────────────────────────────────── */
-  beginDraw(p, e) {
+  /* ── 긋기 ────────────────────────────────────────────────── */
+  beginDraw(p) {
     this.status = 'drawing';
-    p.drawing = true;
-    this.grain = makeGrain((Math.random() * 2 ** 31) | 0);
-    this.points = [];
+    this.grain = makeGrain((Math.random() * 2147483647) | 0);
 
-    const line = lineRectAt(this.textEl, p.startY);
+    p.rects = lineRects(this.textEl);
+    p.lineIndex = lineIndexAt(p.rects, p.startY);
+    const line = p.rects[p.lineIndex];
+
     p.lineLeft = line.left - p.rowRect.left;
     p.lineRight = line.right - p.rowRect.left;
     p.lineWidth = Math.max(1, line.width);
     p.baseY = (line.top + line.bottom) / 2 - p.rowRect.top;
     p.originX = p.startX - p.rowRect.left;
     p.originY = p.startY;
-    p.speed = 0;
     p.minX = Infinity; p.maxX = -Infinity;
 
-    this.path.setAttribute('fill', STROKE.inkColor);
-    this.path.setAttribute('fill-opacity', '0.88');   // 긋는 동안 살짝 옅게
-    this.addSample(e.clientX, e.clientY, e.timeStamp);
+    this.clearStrokes();
+    this.active = this.addStroke();
+    this.active.el.setAttribute('fill-opacity', '0.88');   // 긋는 동안 살짝 옅게
+    this.addSample(p, p.startX, p.startY);
   }
 
-  /* 손가락 샘플 → 3px 간격 보간 점 추가 */
-  addSample(clientX, clientY, t) {
-    const p = this.pointer;
+  /* 손가락 샘플 → 3px 간격으로 보간해서 점 추가 */
+  addSample(p, clientX, clientY) {
+    const s = this.active;
+    if (!s) return;
     const x = clientX - p.rowRect.left;
-    const dt = Math.max(1, t - p.lastT);
-    const inst = Math.abs(clientX - p.lastX) / dt;    // px/ms
-    p.speed = p.speed * 0.75 + inst * 0.25;
-    p.lastX = clientX; p.lastY = clientY; p.lastT = t;
-
-    const fingerDy = (clientY - p.originY) * STROKE.followY;
     const g = this.grain;
-    const mkPoint = (px) => {
-      const y = p.baseY + fingerDy + g.tilt * (px - p.originX) + g.noise(px);
-      const wBase = STROKE.widthMax -
-        (STROKE.widthMax - STROKE.widthMin) * clamp(p.speed / STROKE.speedRef, 0, 1);
-      return { x: px, y, w: Math.max(0.5, wBase * g.widthJitter(px)) };
-    };
+    const fingerDy = (clientY - p.originY) * STROKE.followY;
+    const wBase = STROKE.widthMax -
+      (STROKE.widthMax - STROKE.widthMin) * clamp(p.speed / STROKE.speedRef, 0, 1);
 
-    const last = this.points[this.points.length - 1];
+    const mk = px => ({
+      x: px,
+      y: p.baseY + fingerDy + g.tilt * (px - p.originX) + g.noise(px),
+      w: Math.max(0.5, wBase * g.widthJitter(px)),
+    });
+
+    const last = s.points[s.points.length - 1];
     if (!last) {
-      this.points.push(mkPoint(x));
+      s.points.push(mk(x));
     } else {
       const gap = x - last.x;
       const steps = Math.max(1, Math.floor(Math.abs(gap) / 3));
-      for (let i = 1; i <= steps; i++) {
-        this.points.push(mkPoint(last.x + (gap * i) / steps));
-      }
+      for (let i = 1; i <= steps; i++) s.points.push(mk(last.x + (gap * i) / steps));
     }
     p.minX = Math.min(p.minX, x);
     p.maxX = Math.max(p.maxX, x);
-    this.render();
-  }
-
-  render(fraction = 1) {
-    this.path.setAttribute('d', buildPathD(this.points, fraction));
+    this.draw(s);
   }
 
   finishDraw(p) {
-    const covered =
-      Math.max(0, Math.min(p.maxX, p.lineRight) - Math.max(p.minX, p.lineLeft));
-    if (covered / p.lineWidth >= STROKE.commitRatio) {
-      this.commit(p);
-    } else {
-      this.rewind(() => { this.status = 'idle'; });
-    }
+    const covered = Math.max(0,
+      Math.min(p.maxX, p.lineRight) - Math.max(p.minX, p.lineLeft));
+    if (covered / p.lineWidth >= STROKE.commitRatio) this.commit(p);
+    else this.rewind(() => { this.status = 'idle'; });
   }
 
-  /* ── 확정: 양끝을 텍스트 폭 + overshoot까지 뻗는다 ────────── */
+  /* 확정 — 손으로 그은 획은 그은 그대로 두고,
+     감겨 있는 나머지 줄만 자동으로 그어 채운다. */
   commit(p) {
     this.status = 'animating';
-    haptic();
+    this.active.el.setAttribute('fill-opacity', '1');
+    haptic(STROKE.hapticOnCommit);
 
-    const targetMin = Math.min(p.minX, p.lineLeft - STROKE.overshoot);
-    const targetMax = Math.max(p.maxX, p.lineRight + STROKE.overshoot);
-    const base = this.points.slice();
-    const first = base[0], last = base[base.length - 1];
-    const ltr = first.x <= last.x;
-    const leftAnchor = ltr ? first : last;
-    const rightAnchor = ltr ? last : first;
-    const g = this.grain;
+    const others = [];
+    if (STROKE.strikeAllLines) {
+      p.rects.forEach((r, i) => {
+        if (i !== p.lineIndex) others.push(this.buildAutoStroke(r, p.rowRect));
+      });
+    }
+    if (!others.length) { this.settle(); return; }
 
-    const synth = (anchor, x) => ({
-      x,
-      y: anchor.y + g.tilt * (x - anchor.x) + (g.noise(x) - g.noise(anchor.x)),
-      w: anchor.w,
-    });
-    const ascPts = (fromX, toX, anchor) => {
-      const pts = [];
-      for (let x = fromX; x <= toX; x += 3) pts.push(synth(anchor, x));
-      return pts;
-    };
-
-    const t0 = performance.now();
-    const step = (now) => {
-      const t = easeOut(clamp((now - t0) / STROKE.commitMs, 0, 1));
-      const curMin = lerp(leftAnchor.x, targetMin, t);
-      const curMax = lerp(rightAnchor.x, targetMax, t);
-      /* 확장 점은 항상 x 오름차순으로 만들고, 획 진행 방향에 맞춰 잇는다 */
-      const leftExt = ascPts(curMin, leftAnchor.x - 1, leftAnchor);
-      const rightExt = ascPts(rightAnchor.x + 1, curMax, rightAnchor);
-      this.points = ltr
-        ? [...leftExt, ...base, ...rightExt]
-        : [...rightExt.reverse(), ...base, ...leftExt.reverse()];
-      this.render();
-      if (t < 1) { this.anim = requestAnimationFrame(step); }
-      else {
-        this.anim = null;
-        this.path.setAttribute('fill-opacity', '1');
-        this.status = 'struck';
-        this.el.classList.remove('pulse');
-        void this.el.offsetWidth;          // 애니메이션 재시작 트릭
-        this.el.classList.add('pulse');
-      }
-    };
-    this.anim = requestAnimationFrame(step);
+    others.forEach(s => this.draw(s, 0));
+    const total = STROKE.autoStrokeMs + STROKE.autoStagger * (others.length - 1);
+    Sound.scratch(0.5);
+    this.animate(total, t => {
+      const ms = t * total;
+      others.forEach((s, i) => {
+        const local = clamp((ms - i * STROKE.autoStagger) / STROKE.autoStrokeMs, 0, 1);
+        this.draw(s, easeOut(local));
+      });
+    }, () => { Sound.silence(); this.settle(); });
   }
 
-  /* ── 되감기: 끝에서부터 선이 사라진다 ─────────────────────── */
-  rewind(done) {
-    this.status = 'animating';
-    const t0 = performance.now();
-    const step = (now) => {
-      const t = easeIn(clamp((now - t0) / STROKE.rewindMs, 0, 1));
-      this.render(1 - t);
-      if (t < 1) { this.anim = requestAnimationFrame(step); }
-      else {
-        this.anim = null;
-        this.points = [];
-        this.path.setAttribute('d', '');
-        done && done();
-      }
-    };
-    this.anim = requestAnimationFrame(step);
-  }
+  /* 한 줄을 왼→오로 가득 채우는 자동 획 */
+  buildAutoStroke(rect, rowRect) {
+    const g = makeGrain((Math.random() * 2147483647) | 0);
+    const left = rect.left - rowRect.left - STROKE.overshoot;
+    const right = rect.right - rowRect.left + STROKE.overshoot;
+    const baseY = (rect.top + rect.bottom) / 2 - rowRect.top;
+    const span = Math.max(1, right - left);
 
-  /* ── 더블탭: 왼→오 자동 긋기 ─────────────────────────────── */
-  autoStrike() {
-    this.status = 'animating';
-    this.grain = makeGrain((Math.random() * 2 ** 31) | 0);
-    const g = this.grain;
-    const rowRect = this.el.getBoundingClientRect();
-    const line = lineRectAt(this.textEl, rowRect.top + rowRect.height / 2);
-    const left = line.left - rowRect.left - STROKE.overshoot;
-    const right = line.right - rowRect.left + STROKE.overshoot;
-    const baseY = (line.top + line.bottom) / 2 - rowRect.top;
-    const span = right - left;
-
-    this.points = [];
+    const s = this.addStroke();
+    s.el.setAttribute('fill-opacity', '1');
     for (let x = left; x <= right; x += 3) {
-      const tt = (x - left) / span;
-      const profile = Math.pow(Math.sin(Math.PI * clamp(tt, 0, 1)), 0.6);
-      const w = lerp(STROKE.widthMin * 1.1, STROKE.widthMax * 0.9, profile);
-      this.points.push({
+      const profile = Math.pow(Math.sin(Math.PI * clamp((x - left) / span, 0, 1)), 0.6);
+      const w = STROKE.widthMin * 1.1 +
+        (STROKE.widthMax * 0.9 - STROKE.widthMin * 1.1) * profile;
+      s.points.push({
         x,
         y: baseY + g.tilt * (x - left) + g.noise(x),
         w: Math.max(0.5, w * g.widthJitter(x)),
       });
     }
+    return s;
+  }
 
-    this.path.setAttribute('fill', STROKE.inkColor);
-    this.path.setAttribute('fill-opacity', '1');
-    const t0 = performance.now();
-    const step = (now) => {
-      const t = easeOut(clamp((now - t0) / STROKE.autoStrokeMs, 0, 1));
-      this.render(t);
-      if (t < 1) { this.anim = requestAnimationFrame(step); }
+  settle() {
+    this.status = 'struck';
+    this.el.classList.remove('pulse');
+    void this.el.offsetWidth;
+    this.el.classList.add('pulse');
+  }
+
+  /* ── 더블탭: 모든 줄을 자동으로 긋기 ─────────────────────── */
+  autoStrike() {
+    this.status = 'animating';
+    const rowRect = this.el.getBoundingClientRect();
+    const rects = lineRects(this.textEl);
+    if (!rects.length) { this.status = 'idle'; return; }
+
+    this.clearStrokes();
+    const strokes = rects.map(r => this.buildAutoStroke(r, rowRect));
+    strokes.forEach(s => this.draw(s, 0));
+
+    const total = STROKE.autoStrokeMs + STROKE.autoStagger * (strokes.length - 1);
+    Sound.init(); Sound.resume(); Sound.scratch(0.5);
+    this.animate(total, t => {
+      const ms = t * total;
+      strokes.forEach((s, i) => {
+        const local = clamp((ms - i * STROKE.autoStagger) / STROKE.autoStrokeMs, 0, 1);
+        this.draw(s, easeOut(local));
+      });
+    }, () => {
+      Sound.silence();
+      haptic(STROKE.hapticOnCommit);
+      this.settle();
+    });
+  }
+
+  /* ── 임계값 미달: 끝에서부터 되감기 ──────────────────────── */
+  rewind(done) {
+    this.status = 'animating';
+    const s = this.active;
+    if (!s) { this.clearStrokes(); if (done) done(); return; }
+    this.animate(STROKE.rewindMs, t => this.draw(s, 1 - easeIn(t)), () => {
+      this.clearStrokes();
+      if (done) done();
+    });
+  }
+
+  /* ── 문대서 지우기 ───────────────────────────────────────── */
+  trackRub(p, step) {
+    if (step !== 0) {
+      const dir = step > 0 ? 1 : -1;
+      if (p.dir === 0) { p.dir = dir; p.seg = Math.abs(step); }
+      else if (dir === p.dir) { p.seg += Math.abs(step); }
       else {
-        this.anim = null;
-        haptic();
-        this.status = 'struck';
-        this.el.classList.remove('pulse');
-        void this.el.offsetWidth;
-        this.el.classList.add('pulse');
+        if (p.seg >= ERASE.minSegment) {
+          p.reversals++;
+          if (p.reversals === ERASE.minReversals) p.eraseFrom = p.rubbed;
+        }
+        p.dir = dir; p.seg = Math.abs(step);
       }
-    };
-    this.anim = requestAnimationFrame(step);
+    }
+    p.rubbed += Math.abs(step);
+
+    if (p.reversals < ERASE.minReversals) return;
+
+    p.progress = clamp((p.rubbed - p.eraseFrom) / ERASE.rubDistance, 0, 1);
+    this.setOpacity(1 - p.progress);
+
+    if (p.progress >= 1) {
+      this.pointer = null;
+      Sound.silence();
+      haptic(ERASE.hapticOnErase);
+      this.clearStrokes();
+      this.status = 'idle';
+    }
+  }
+
+  /* 지우다 만 획은 되살아난다 */
+  restore() {
+    this.status = 'animating';
+    const from = parseFloat(this.strokes[0] &&
+      this.strokes[0].el.getAttribute('fill-opacity')) || 0;
+    this.animate(STROKE.restoreMs,
+      t => this.setOpacity(from + (1 - from) * t),
+      () => { this.setOpacity(1); this.status = 'struck'; });
   }
 
   reset() {
     if (this.anim) cancelAnimationFrame(this.anim);
     this.anim = null;
     this.pointer = null;
-    this.points = [];
-    this.path.setAttribute('d', '');
-    this.path.setAttribute('fill-opacity', '1');
+    this.clearStrokes();
     this.status = 'idle';
   }
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   부트스트랩
+   5. 부트스트랩
    ═══════════════════════════════════════════════════════════════ */
 const list = document.getElementById('list');
 const items = DEMO_ITEMS.map(text => new StrikeItem(text, list));
