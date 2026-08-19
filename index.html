@@ -7,14 +7,14 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Clear Week">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="theme-color" content="#faf9f4">
+<meta name="theme-color" content="#ffffff">
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="icon" href="icon-512.png" sizes="512x512">
 <link rel="manifest" href="manifest.webmanifest">
 <title>Clear Week</title>
 <style>
   :root {
-    --paper: #faf9f4;          /* 옅은 미색 종이 */
+    --paper: #ffffff;          /* 종이 흰색 */
     --ink: #1d2b50;            /* 본문 잉크: 짙은 남색 */
     --ink-faint: #9a9eab;      /* 보조 텍스트 */
     --rule: #d9d6cb;           /* 칸 구분선 */
@@ -369,6 +369,7 @@ const SPLIT = {
   commitRatio: 0.55,   // 칸 높이의 이 비율 이상 그어야 열이 나뉜다
   slopPx: 8,           // 세로 제스처로 인정할 최소 이동량 (px)
   settleMs: 130,       // 그은 선이 열 경계로 스르륵 자리잡는 시간 (ms)
+  handoffMs: 140,      // 손그림 획이 사라지고 표의 선이 대신 놓이는 시간 (ms)
   rewindMs: 200,       // 미달 시 되감기는 시간 (ms)
   rubReversals: 3,     // 이만큼 문대면 선이 지워지고 열이 합쳐진다
   rubDistance: 160,    // 판정 후 이만큼 더 문대면 완전히 지워짐 (px)
@@ -991,17 +992,21 @@ class CellSplits {
     return bodyLeft + (i + 1) * colW + i * gap + gap / 2;
   }
 
-  /* 열 수를 반영하고 선을 제자리에 그린다 */
+  /* 열 수를 반영한다. 확정된 선은 손그림이 아니라 표의 얇은 실선. */
   layout() {
     this.body.style.columnCount = String(this.count + 1);
     this.lines.forEach(l => l.el.remove());
     this.lines = [];
     const h = this.cell.clientHeight;
     this.seeds.forEach((seed, i) => {
-      const x = this.boundaryX(i);
-      const el = document.createElementNS(NS, 'path');
-      el.setAttribute('fill', STROKE.inkColor);
-      el.setAttribute('d', buildVPathD(makeVPoints(seed, x, 4, h - 4)));
+      const x = Math.round(this.boundaryX(i));
+      const el = document.createElementNS(NS, 'rect');
+      el.setAttribute('x', String(x));
+      el.setAttribute('y', '0');
+      el.setAttribute('width', '1');
+      el.setAttribute('height', String(h));
+      el.setAttribute('shape-rendering', 'crispEdges');
+      el.style.fill = 'var(--rule)';      /* 다른 칸 구분선과 같은 색·굵기 */
       this.svg.appendChild(el);
       this.lines.push({ el, x, seed });
     });
@@ -1111,15 +1116,25 @@ class CellSplits {
     const step = now => {
       const t = easeOut(clamp((now - t0) / SPLIT.settleMs, 0, 1));
       const x = fromX + (targetX - fromX) * t;
-      const y0 = fromTop + (4 - fromTop) * t;
-      const y1 = fromBot + ((cellH - 4) - fromBot) * t;
+      const y0 = fromTop + (0 - fromTop) * t;
+      const y1 = fromBot + (cellH - fromBot) * t;
       p.active.setAttribute('d', buildVPathD(makeVPoints(p.seed, x, y0, y1)));
       if (t < 1) requestAnimationFrame(step);
-      else {
-        p.active.remove();
-        this.busy = false;
-        this.host.relayout();      // 열 수 반영 + 항목 재배치 + 획 복원
-      }
+      else this.handoff(p.active);
+    };
+    requestAnimationFrame(step);
+  }
+
+  /* 손으로 그은 획이 옅어지며 사라지고, 그 자리에 표의 선이 놓인다 */
+  handoff(ink) {
+    this.busy = false;
+    this.host.relayout();          // 열 수 반영 + 항목 재배치 + 획 복원
+    const t0 = performance.now();
+    const step = now => {
+      const t = clamp((now - t0) / SPLIT.handoffMs, 0, 1);
+      ink.setAttribute('opacity', String(1 - t));
+      if (t < 1) requestAnimationFrame(step);
+      else ink.remove();
     };
     requestAnimationFrame(step);
   }
