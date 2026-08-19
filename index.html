@@ -20,9 +20,12 @@
     --rule: #d9d6cb;           /* 칸 구분선 */
     --rule-soft: #e8e5db;      /* 항목 사이 옅은 선 */
 
+    /* 글자 크기 — 종이 플래너의 작은 손글씨에 가깝게 */
+    --item-font: 13px;         /* 요일 칸 항목 */
+    --free-font: 11px;         /* 자유 칸 항목 (더 좁으므로 한 단계 더) */
+
     /* 오른쪽 자유 칸 — 종이 플래너의 우측 여백 */
     --free-width: clamp(84px, 27%, 132px);
-    --free-font: 15px;         /* 좁은 칸이라 본문보다 한 단계 작게 */
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body {
@@ -72,13 +75,20 @@
   .days, .free { min-width: 0; }
   .free { border-left: 1px solid var(--rule); padding-left: 12px; }
 
-  .cell { padding: 12px 0 6px; }
+  .cell { padding: 8px 0 6px; }
   .day { border-bottom: 1px solid var(--rule); }
-  .day-label {
+
+  /* 라벨을 누르면 그 칸에 항목이 추가된다 (＋ 버튼 없음) */
+  .cell-label {
+    display: block; width: 100%; text-align: left;
+    border: none; background: none; font: inherit;
     font-size: 11px; font-weight: 700; letter-spacing: 0.18em;
-    color: var(--ink-faint); min-height: 15px;
+    color: var(--ink-faint);
+    padding: 8px 2px; min-height: 34px;
+    cursor: pointer;
   }
-  .free .item-text, .free .add, .free .entry { font-size: var(--free-font); }
+  .free .cell-label { letter-spacing: 0.06em; text-transform: none; }
+  .free .item-text, .free .entry { font-size: var(--free-font); }
 
   /* ── 항목 ────────────────────────────────────────────────── */
   .item {
@@ -91,7 +101,7 @@
     cursor: default;
   }
   .item + .item { border-top: 1px solid var(--rule-soft); }
-  .item-text { font-size: 17px; line-height: 1.45; overflow-wrap: anywhere; }
+  .item-text { font-size: var(--item-font); line-height: 1.5; overflow-wrap: anywhere; }
   .strike-svg {
     position: absolute; inset: 0;
     width: 100%; height: 100%;
@@ -106,17 +116,10 @@
   }
 
   /* ── 입력 ────────────────────────────────────────────────── */
-  .add {
-    display: block; width: 100%;
-    border: none; background: none; font: inherit;
-    font-size: 17px; color: var(--ink-faint);
-    text-align: left; padding: 10px 2px; min-height: 44px;
-    cursor: pointer;
-  }
   .entry {
     width: 100%;
     border: none; background: none; font: inherit;
-    font-size: 17px; line-height: 1.45; color: var(--ink);
+    font-size: var(--item-font); line-height: 1.5; color: var(--ink);
     padding: 10px 2px; min-height: 44px;
     -webkit-user-select: text; user-select: text;
   }
@@ -287,7 +290,7 @@ const DAY_KEYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun', 'free'];
 const WEEK_DAYS = DAY_KEYS.slice(0, 7);   /* 왼쪽 열에 세로로 쌓이는 요일 칸 */
 const DAY_LABELS = {
   mon: 'MON', tue: 'TUE', wed: 'WED', thu: 'THU',
-  fri: 'FRI', sat: 'SAT', sun: 'SUN', free: '',      /* 8번째 칸은 라벨 없음 */
+  fri: 'FRI', sat: 'SAT', sun: 'SUN', free: 'note',  /* 8번째 칸 */
 };
 
 function mondayOf(date) {
@@ -929,13 +932,21 @@ const App = {
     const section = document.createElement('section');
     section.className = key === 'free' ? 'cell' : 'cell day';
 
-    const label = document.createElement('div');
-    label.className = 'day-label';
-    label.textContent = DAY_LABELS[key];      /* 자유 칸은 빈 라벨 */
-    section.appendChild(label);
-
     const listEl = document.createElement('div');
     listEl.className = 'day-items';
+
+    /* 요일 라벨(과 자유 칸의 note)이 곧 입력 버튼이다 */
+    let label;
+    if (this.readOnly) {
+      label = document.createElement('div');
+    } else {
+      label = document.createElement('button');
+      label.type = 'button';
+      label.addEventListener('click', () => this.openEntry(key, listEl));
+    }
+    label.className = 'cell-label';
+    label.textContent = DAY_LABELS[key];
+    section.appendChild(label);
     section.appendChild(listEl);
 
     this.week.days[key].forEach(data => {
@@ -943,15 +954,6 @@ const App = {
       listEl.appendChild(item.el);
       pending.push(item);
     });
-
-    if (!this.readOnly) {
-      const add = document.createElement('button');
-      add.className = 'add';
-      add.type = 'button';
-      add.textContent = '＋';
-      add.addEventListener('click', () => this.openEntry(key, listEl, add));
-      section.appendChild(add);
-    }
     return section;
   },
 
@@ -966,8 +968,11 @@ const App = {
   },
 
   /* ── 적기: 인라인 입력, 엔터로 연속 입력 ─────────────────── */
-  openEntry(dayKey, listEl, addBtn) {
+  openEntry(dayKey, listEl) {
     if (this.readOnly) return;
+    const open = listEl.querySelector('.entry');
+    if (open) { open.focus(); return; }
+
     const input = document.createElement('input');
     input.className = 'entry';
     input.type = 'text';
@@ -980,7 +985,6 @@ const App = {
       if (closed) return;
       closed = true;
       input.remove();
-      addBtn.hidden = false;
     };
 
     input.addEventListener('keydown', e => {
@@ -997,13 +1001,13 @@ const App = {
       this.save();
 
       const item = this.makeItem(data, dayKey, listEl);
-      listEl.appendChild(item.el);
+      listEl.insertBefore(item.el, input);    // 입력창은 늘 목록 맨 아래
+      item.restore();
       input.value = '';                       // 다음 줄 입력창이 바로 이어짐
     });
     input.addEventListener('blur', close);
 
-    addBtn.hidden = true;
-    addBtn.parentNode.insertBefore(input, addBtn);
+    listEl.appendChild(input);
     input.focus();
   },
 
@@ -1026,8 +1030,7 @@ const App = {
       item.data.text = text;
       item.textEl.textContent = text;
       this.save();
-      listEl.insertBefore(item.el, input.nextSibling);
-      item.el.hidden = false;
+      item.el.hidden = false;                 // 제자리에 그대로 둔다
     };
 
     input.addEventListener('keydown', e => {
