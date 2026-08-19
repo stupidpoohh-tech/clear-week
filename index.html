@@ -92,8 +92,7 @@
     flex: 1 1 auto; min-height: 0;
     display: grid;
     grid-template-columns: 1fr var(--free-width);
-    border: 1px solid var(--rule);
-    border-top: none;                 /* 머리말 아래 선이 표의 윗선 */
+    border-bottom: 1px solid var(--rule);   /* 아래만 닫고 좌우는 연다 */
   }
   .days {
     min-height: 0; min-width: 0;
@@ -104,7 +103,7 @@
   .free {
     min-height: 0; min-width: 0;
     border-left: 1px solid var(--rule);
-    padding: 0 8px 0 10px;
+    padding-left: 10px;
   }
 
   /* ── 칸 ──────────────────────────────────────────────────── */
@@ -125,7 +124,7 @@
 
   /* 라벨 = 살짝 누르면 항목 추가, 꾹 눌러 아래로 끌면 요일 아래 메모 */
   .cell-gutter { display: flex; flex-direction: column; min-width: 0; }
-  .cell.day > .cell-gutter { flex: 0 0 var(--label-w); align-self: flex-start; padding-left: 6px; }
+  .cell.day > .cell-gutter { flex: 0 0 var(--label-w); align-self: flex-start; }
   .cell.free-cell > .cell-gutter { flex: none; width: 100%; }
 
   .cell-label {
@@ -172,6 +171,7 @@
     break-inside: avoid;
     cursor: default;
   }
+  .item.purging { opacity: 0.3; }        /* 꾹 누른 뒤 드래그로 걸린 항목 */
   .item-text { font-size: calc(var(--item-font) * var(--fs)); line-height: 1.45; overflow-wrap: anywhere; }
   .free .item-text, .free .entry { font-size: calc(var(--free-font) * var(--fs)); }
   .strike-svg {
@@ -279,6 +279,9 @@ const SOUND = {
 /* ═══════════════════════════════════════════════════════════════
    2. 유틸
    ═══════════════════════════════════════════════════════════════ */
+/* 여러 항목을 훑어 지우는 중에는 칸 나누기가 끼어들지 않게 한다 */
+const Gesture = { purging: false };
+
 const NS = 'http://www.w3.org/2000/svg';
 const TAU = Math.PI * 2;
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -561,6 +564,7 @@ class StrikeItem {
 
     this.el = document.createElement('div');
     this.el.className = 'item';
+    this.el._strikeItem = this;        /* 드래그로 훑을 때 되찾기 위해 */
 
     this.textEl = document.createElement('span');
     this.textEl.className = 'item-text';
@@ -669,9 +673,14 @@ class StrikeItem {
       active: null, grain: null, seed: 0,
       dirX: 0, trail: null, trailStroke: null, trailD: '', passTouched: null,
       longPress: setTimeout(() => {
-        this.pointer = null;
+        const p = this.pointer;
+        if (!p) return;
+        p.longPress = null;
+        p.mode = 'purge';               // 여기서 떼면 이 항목만, 끌면 훑은 것 전부
+        p.purge = new Set([this]);
+        Gesture.purging = true;
         haptic(true);
-        this.host.remove(this);
+        this.el.classList.add('purging');
       }, STROKE.longPressMs),
     };
   }
@@ -688,6 +697,20 @@ class StrikeItem {
     const dy = e.clientY - p.startY;
     p.moved = Math.max(p.moved, Math.hypot(dx, dy));
     if (p.longPress && p.moved > 10) { clearTimeout(p.longPress); p.longPress = null; }
+
+    /* 꾹 누른 뒤 드래그 — 손가락이 지나간 항목을 전부 담는다 */
+    if (p.mode === 'purge') {
+      const under = document.elementFromPoint(e.clientX, e.clientY);
+      const row = under && under.closest ? under.closest('.item') : null;
+      const item = row && row._strikeItem;
+      if (item && !p.purge.has(item)) {
+        p.purge.add(item);
+        item.el.classList.add('purging');
+        haptic(true);
+      }
+      p.lastX = e.clientX; p.lastY = e.clientY; p.lastT = e.timeStamp;
+      return;
+    }
 
     if (!p.mode && Math.abs(dx) >= STROKE.slopPx) {
       if (Math.abs(dx) <= Math.abs(dy)) {
@@ -724,6 +747,13 @@ class StrikeItem {
     this.pointer = null;
     Sound.silence();
 
+    if (p.mode === 'purge') {
+      Gesture.purging = false;
+      const doomed = Array.from(p.purge);
+      doomed.forEach(it => it.el.classList.remove('purging'));
+      doomed.forEach(it => it.host.remove(it));
+      return;
+    }
     if (p.mode === 'draw') { this.finishDraw(p); return; }
     if (p.mode === 'erase' || p.mode === 'pass') return;
 
@@ -750,6 +780,10 @@ class StrikeItem {
     if (p.longPress) clearTimeout(p.longPress);
     this.pointer = null;
     Sound.silence();
+    if (p.mode === 'purge') {
+      Gesture.purging = false;
+      p.purge.forEach(it => it.el.classList.remove('purging'));
+    }
     if (p.mode === 'draw') this.rewind(p.active, () => { this.status = 'idle'; });
   }
 
@@ -1066,6 +1100,28 @@ class CellSplits {
     });
   }
 
+  /* 마지막 단에 항목이 남아 있으면 선을 지울 수 없다 */
+  lastColumnBusy() {
+    if (!this.count) return false;
+    const left = this.cell.getBoundingClientRect().left;
+    const edge = this.boundaryX(this.count - 1);
+    return Array.from(this.body.querySelectorAll('.item')).some(
+      el => el.getBoundingClientRect().left - left > edge);
+  }
+
+  /* 지울 수 없을 때 — 선이 잠깐 흔들려 거절을 알린다 */
+  refuse(line) {
+    const x0 = parseFloat(line.el.getAttribute('x'));
+    const t0 = performance.now();
+    const step = now => {
+      const t = (now - t0) / 170;
+      if (t >= 1) { line.el.setAttribute('x', String(x0)); return; }
+      line.el.setAttribute('x', String(x0 + Math.sin(t * Math.PI * 3) * 2));
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+
   lineAt(x) {
     let best = null, bd = Infinity;
     for (const l of this.lines) {
@@ -1077,7 +1133,7 @@ class CellSplits {
 
   /* ── 제스처 ──────────────────────────────────────────────── */
   onDown(e) {
-    if (this.host.readOnly || this.pointer || this.busy) return;
+    if (this.host.readOnly || this.pointer || this.busy || Gesture.purging) return;
     if (e.target.closest('.cell-gutter')) return;   // 라벨 쪽 제스처는 건드리지 않는다
     const rect = this.cell.getBoundingClientRect();
     this.pointer = {
@@ -1094,6 +1150,7 @@ class CellSplits {
     if (grabbed) {
       this.pointer.longPress = setTimeout(() => {
         this.pointer = null;
+        if (this.lastColumnBusy()) { this.refuse(grabbed); return; }
         haptic(true);
         const i = this.lines.indexOf(grabbed);
         if (i >= 0) this.seeds.splice(i, 1);
@@ -1106,6 +1163,7 @@ class CellSplits {
   onMove(e) {
     const p = this.pointer;
     if (!p || e.pointerId !== p.id) return;
+    if (Gesture.purging) { this.onCancel(); return; }   // 항목 훑어 지우는 중
     const dx = e.clientX - p.startX;
     const dy = e.clientY - p.startY;
     const stepX = e.clientX - p.lastX;
@@ -1121,8 +1179,9 @@ class CellSplits {
         if (p.mode === 'split') this.beginSplit(p, e);
       } else {
         const line = this.lineAt(p.startX - p.rect.left);
-        p.mode = line ? 'rub' : 'pass';
-        if (line) p.line = line;
+        if (line && this.lastColumnBusy()) { this.refuse(line); p.mode = 'pass'; }
+        else if (line) { p.mode = 'rub'; p.line = line; }
+        else { p.mode = 'pass'; }
       }
     }
 
