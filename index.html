@@ -19,6 +19,10 @@
     --ink-faint: #9a9eab;      /* 보조 텍스트 */
     --rule: #d9d6cb;           /* 칸 구분선 */
     --rule-soft: #e8e5db;      /* 항목 사이 옅은 선 */
+
+    /* 오른쪽 자유 칸 — 종이 플래너의 우측 여백 */
+    --free-width: clamp(84px, 27%, 132px);
+    --free-font: 15px;         /* 좁은 칸이라 본문보다 한 단계 작게 */
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body {
@@ -63,12 +67,18 @@
   }
 
   /* ── 칸 ──────────────────────────────────────────────────── */
-  .day { border-bottom: 1px solid var(--rule); padding: 12px 0 6px; }
+  /* 왼쪽 = 월~일 7칸(세로 스크롤), 오른쪽 = 요일 없는 자유 칸 1열 */
+  .week { display: grid; grid-template-columns: 1fr var(--free-width); }
+  .days, .free { min-width: 0; }
+  .free { border-left: 1px solid var(--rule); padding-left: 12px; }
+
+  .cell { padding: 12px 0 6px; }
+  .day { border-bottom: 1px solid var(--rule); }
   .day-label {
     font-size: 11px; font-weight: 700; letter-spacing: 0.18em;
     color: var(--ink-faint); min-height: 15px;
   }
-  .day.free .day-label { letter-spacing: 0; }
+  .free .item-text, .free .add, .free .entry { font-size: var(--free-font); }
 
   /* ── 항목 ────────────────────────────────────────────────── */
   .item {
@@ -274,6 +284,7 @@ function haptic(on) {
    ═══════════════════════════════════════════════════════════════ */
 const STORE_PREFIX = 'clearweek:';
 const DAY_KEYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun', 'free'];
+const WEEK_DAYS = DAY_KEYS.slice(0, 7);   /* 왼쪽 열에 세로로 쌓이는 요일 칸 */
 const DAY_LABELS = {
   mon: 'MON', tue: 'TUE', wed: 'WED', thu: 'THU',
   fri: 'FRI', sat: 'SAT', sun: 'SUN', free: '',      /* 8번째 칸은 라벨 없음 */
@@ -897,38 +908,51 @@ const App = {
     body.innerHTML = '';
     const pending = [];
 
-    DAY_KEYS.forEach(key => {
-      const section = document.createElement('section');
-      section.className = 'day' + (key === 'free' ? ' free' : '');
+    const grid = document.createElement('div');
+    grid.className = 'week';
+    const daysCol = document.createElement('div');
+    daysCol.className = 'days';
+    const freeCol = document.createElement('div');
+    freeCol.className = 'free';
+    grid.appendChild(daysCol);
+    grid.appendChild(freeCol);
+    body.appendChild(grid);
 
-      const label = document.createElement('div');
-      label.className = 'day-label';
-      label.textContent = DAY_LABELS[key];
-      section.appendChild(label);
-
-      const listEl = document.createElement('div');
-      listEl.className = 'day-items';
-      section.appendChild(listEl);
-
-      this.week.days[key].forEach(data => {
-        const item = this.makeItem(data, key, listEl);
-        listEl.appendChild(item.el);
-        pending.push(item);
-      });
-
-      if (!this.readOnly) {
-        const add = document.createElement('button');
-        add.className = 'add';
-        add.type = 'button';
-        add.textContent = '＋';
-        add.addEventListener('click', () => this.openEntry(key, listEl, add));
-        section.appendChild(add);
-      }
-      body.appendChild(section);
-    });
+    WEEK_DAYS.forEach(key => daysCol.appendChild(this.buildCell(key, pending)));
+    freeCol.appendChild(this.buildCell('free', pending));
 
     /* 레이아웃이 잡힌 뒤에 저장된 획을 되살린다 */
     pending.forEach(item => item.restore());
+  },
+
+  buildCell(key, pending) {
+    const section = document.createElement('section');
+    section.className = key === 'free' ? 'cell' : 'cell day';
+
+    const label = document.createElement('div');
+    label.className = 'day-label';
+    label.textContent = DAY_LABELS[key];      /* 자유 칸은 빈 라벨 */
+    section.appendChild(label);
+
+    const listEl = document.createElement('div');
+    listEl.className = 'day-items';
+    section.appendChild(listEl);
+
+    this.week.days[key].forEach(data => {
+      const item = this.makeItem(data, key, listEl);
+      listEl.appendChild(item.el);
+      pending.push(item);
+    });
+
+    if (!this.readOnly) {
+      const add = document.createElement('button');
+      add.className = 'add';
+      add.type = 'button';
+      add.textContent = '＋';
+      add.addEventListener('click', () => this.openEntry(key, listEl, add));
+      section.appendChild(add);
+    }
+    return section;
   },
 
   makeItem(data, dayKey, listEl) {
