@@ -8,21 +8,24 @@
 <meta name="apple-mobile-web-app-title" content="Clear Week">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="theme-color" content="#ffffff">
+<meta name="color-scheme" content="light">
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="icon" href="icon-512.png" sizes="512x512">
 <link rel="manifest" href="manifest.webmanifest">
 <title>Clear Week</title>
 <style>
   :root {
-    --paper: #ffffff;          /* 종이 흰색 */
+    color-scheme: light;       /* 다크모드에서도 색이 뒤집히지 않게 */
+    --paper: #ffffff;          /* 배경: 흰색 */
     --ink: #1d2b50;            /* 본문 잉크: 짙은 남색 */
     --ink-faint: #9a9eab;      /* 보조 텍스트 */
-    --rule: #d9d6cb;           /* 칸 구분선 */
-    --rule-soft: #e8e5db;      /* 항목 사이 옅은 선 */
+    --rule: #dedede;           /* 칸 구분선 — 중성 회색 */
+    --rule-soft: #ededed;      /* 더 옅은 선 */
 
     /* 글자 크기 — 종이 플래너의 작은 손글씨에 가깝게 */
     --item-font: 9.5pt;
     --free-font: 9.5pt;
+    --sublabel-font: 6.5pt;    /* 요일 아래 작은 메모 */
 
     /* 한 화면에 한 주가 다 들어가야 하므로 행은 촘촘하게 */
     --item-height: 26px;       /* 항목 한 줄 높이 */
@@ -33,7 +36,7 @@
     --free-width: clamp(84px, 27%, 132px);
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html { height: 100%; }
+  html { height: 100%; background: var(--paper); }
   body {
     position: fixed; inset: 0; overflow: hidden;   /* 페이지 스크롤 없음 */
     background: var(--paper);
@@ -104,16 +107,36 @@
   .cell.day { flex-direction: row; border-bottom: 1px solid var(--rule); }
   .cell.free-cell { flex-direction: column; }
 
-  /* 라벨을 누르면 그 칸에 항목이 추가된다 (＋ 버튼 없음) */
+  /* 라벨 = 살짝 누르면 항목 추가, 꾹 눌러 아래로 끌면 요일 아래 메모 */
+  .cell-gutter { display: flex; flex-direction: column; min-width: 0; }
+  .cell.day > .cell-gutter { flex: 0 0 var(--label-w); align-self: flex-start; }
+  .cell.free-cell > .cell-gutter { flex: none; width: 100%; }
+
   .cell-label {
     border: none; background: none; font: inherit;
     font-size: 10px; font-weight: 700; letter-spacing: 0.16em;
     color: var(--ink-faint);
     text-align: left; cursor: pointer;
     padding: 7px 0 0;
+    touch-action: none;
   }
-  .cell.day > .cell-label { flex: 0 0 var(--label-w); align-self: flex-start; }
-  .cell.free-cell > .cell-label { flex: none; letter-spacing: 0.06em; padding-bottom: 2px; }
+  .cell.free-cell .cell-label { letter-spacing: 0.06em; padding-bottom: 2px; }
+
+  .sublabel, .sublabel-entry {
+    font-family: inherit;
+    font-size: var(--sublabel-font);
+    font-weight: 600;                 /* 세미볼드 */
+    line-height: 1.35;
+    color: var(--ink);
+    padding: 2px 0 0;
+    overflow-wrap: anywhere;
+  }
+  .sublabel { cursor: pointer; }
+  .sublabel:empty { display: none; }
+  .sublabel-entry {
+    width: 100%; border: none; background: none; outline: none;
+    -webkit-user-select: text; user-select: text;
+  }
 
   /* 항목이 흐르는 영역. 열을 나누면 여기가 여러 단이 된다 */
   .cell-body {
@@ -373,6 +396,13 @@ const SPLIT = {
   rewindMs: 200,       // 미달 시 되감기는 시간 (ms)
   rubReversals: 3,     // 이만큼 문대면 선이 지워지고 열이 합쳐진다
   rubDistance: 160,    // 판정 후 이만큼 더 문대면 완전히 지워짐 (px)
+  longPressMs: 500,    // 세로선을 이만큼 누르고 있으면 삭제
+  grabPx: 22,          // 세로선을 잡은 것으로 볼 거리 (px)
+};
+
+/* 라벨을 꾹 눌러 아래로 끌면 요일 아래 메모를 적는다 */
+const SUBLABEL = {
+  pullDownPx: 14,      // 이만큼 아래로 끌면 메모 입력이 열린다
 };
 const DAY_LABELS = {
   mon: 'MON', tue: 'TUE', wed: 'WED', thu: 'THU',
@@ -403,9 +433,9 @@ function weekTitle(monday) {
 }
 
 function blankWeek(weekId) {
-  const days = {}, splits = {};
-  DAY_KEYS.forEach(k => { days[k] = []; splits[k] = []; });
-  return { weekId, days, splits };
+  const days = {}, splits = {}, notes = {};
+  DAY_KEYS.forEach(k => { days[k] = []; splits[k] = []; notes[k] = ''; });
+  return { weekId, days, splits, notes };
 }
 
 function loadWeek(weekId) {
@@ -418,6 +448,7 @@ function loadWeek(weekId) {
     DAY_KEYS.forEach(k => {
       const sp = w.splits && Array.isArray(w.splits[k]) ? w.splits[k] : [];
       week.splits[k] = sp.slice(0, MAX_SPLITS).map(v => v | 0);
+      week.notes[k] = w.notes && typeof w.notes[k] === 'string' ? w.notes[k] : '';
       const list = w.days && Array.isArray(w.days[k]) ? w.days[k] : [];
       week.days[k] = list.map(it => ({
         id: it.id || String(++uidSeq),
@@ -1024,6 +1055,7 @@ class CellSplits {
   /* ── 제스처 ──────────────────────────────────────────────── */
   onDown(e) {
     if (this.host.readOnly || this.pointer || this.busy) return;
+    if (e.target.closest('.cell-gutter')) return;   // 라벨 쪽 제스처는 건드리지 않는다
     const rect = this.cell.getBoundingClientRect();
     this.pointer = {
       id: e.pointerId, rect,
@@ -1033,6 +1065,19 @@ class CellSplits {
       seed: 0, active: null, minY: 0, maxY: 0,
       dirX: 0, reversals: 0, rubbed: 0, from: 0,
     };
+
+    /* 세로선을 꾹 누르면 삭제 */
+    const grabbed = this.lineAt(e.clientX - rect.left);
+    if (grabbed) {
+      this.pointer.longPress = setTimeout(() => {
+        this.pointer = null;
+        haptic(true);
+        const i = this.lines.indexOf(grabbed);
+        if (i >= 0) this.seeds.splice(i, 1);
+        this.host.save();
+        this.host.relayout();
+      }, SPLIT.longPressMs);
+    }
   }
 
   onMove(e) {
@@ -1041,6 +1086,10 @@ class CellSplits {
     const dx = e.clientX - p.startX;
     const dy = e.clientY - p.startY;
     const stepX = e.clientX - p.lastX;
+
+    if (p.longPress && Math.hypot(dx, dy) > 10) {
+      clearTimeout(p.longPress); p.longPress = null;
+    }
 
     if (!p.mode) {
       if (Math.max(Math.abs(dx), Math.abs(dy)) < SPLIT.slopPx) { p.lastX = e.clientX; return; }
@@ -1062,6 +1111,7 @@ class CellSplits {
   onUp(e) {
     const p = this.pointer;
     if (!p || e.pointerId !== p.id) return;
+    if (p.longPress) clearTimeout(p.longPress);
     this.pointer = null;
     Sound.silence();
     if (p.mode === 'split') this.finishSplit(p);
@@ -1073,6 +1123,7 @@ class CellSplits {
   onCancel() {
     const p = this.pointer;
     if (!p) return;
+    if (p.longPress) clearTimeout(p.longPress);
     this.pointer = null;
     Sound.silence();
     if (p.mode === 'split' && p.active) this.rewind(p.active);
@@ -1268,19 +1319,51 @@ const App = {
     const listEl = document.createElement('div');
     listEl.className = 'cell-body';
 
-    /* 요일 라벨(과 자유 칸의 note)이 곧 입력 버튼이자 들여쓰기 기준 */
-    let label;
-    if (this.readOnly) {
-      label = document.createElement('div');
-    } else {
-      label = document.createElement('button');
-      label.type = 'button';
-      label.addEventListener('click', () => this.openEntry(key, listEl));
-    }
+    /* 왼쪽 여백 = 요일 라벨 + 그 아래 작은 메모 */
+    const gutter = document.createElement('div');
+    gutter.className = 'cell-gutter';
+
+    const label = document.createElement(this.readOnly ? 'div' : 'button');
+    if (!this.readOnly) label.type = 'button';
     label.className = 'cell-label';
     label.textContent = DAY_LABELS[key];
-    section.appendChild(label);
+
+    const sub = document.createElement('div');
+    sub.className = 'sublabel';
+    sub.textContent = this.week.notes[key] || '';
+
+    gutter.appendChild(label);
+    gutter.appendChild(sub);
+    section.appendChild(gutter);
     section.appendChild(listEl);
+
+    if (!this.readOnly) {
+      /* 살짝 누르면 항목 추가, 꾹 눌러 아래로 끌면 요일 아래 메모 */
+      let g = null;
+      label.addEventListener('pointerdown', e => {
+        label.setPointerCapture(e.pointerId);
+        g = { id: e.pointerId, x: e.clientX, y: e.clientY, pulled: false };
+      });
+      label.addEventListener('pointermove', e => {
+        if (!g || e.pointerId !== g.id || g.pulled) return;
+        if (e.clientY - g.y >= SUBLABEL.pullDownPx &&
+            e.clientY - g.y > Math.abs(e.clientX - g.x)) {
+          g.pulled = true;
+          haptic(true);
+          this.openSublabel(key, gutter, sub);
+        }
+      });
+      label.addEventListener('pointerup', e => {
+        if (!g || e.pointerId !== g.id) return;
+        const moved = Math.hypot(e.clientX - g.x, e.clientY - g.y);
+        const pulled = g.pulled;
+        g = null;
+        if (!pulled && moved < 10) this.openEntry(key, listEl);
+      });
+      label.addEventListener('pointercancel', () => { g = null; });
+
+      sub.addEventListener('click', () => this.openSublabel(key, gutter, sub));
+    }
 
     const items = this.week.days[key].map(data => {
       const item = this.makeItem(data, key, listEl);
@@ -1294,7 +1377,7 @@ const App = {
       relayout: () => this.relayoutCell(key),
     });
 
-    this.cells[key] = { section, listEl, items, splits };
+    this.cells[key] = { section, listEl, items, splits, sub };
     return section;
   },
 
@@ -1365,6 +1448,40 @@ const App = {
 
     listEl.appendChild(input);
     input.focus();
+  },
+
+  /* ── 요일 아래 메모 — 6.5pt 세미볼드 ─────────────────────── */
+  openSublabel(key, gutter, sub) {
+    if (this.readOnly || gutter.querySelector('.sublabel-entry')) return;
+
+    const input = document.createElement('input');
+    input.className = 'sublabel-entry';
+    input.type = 'text';
+    input.value = this.week.notes[key] || '';
+    input.setAttribute('enterkeyhint', 'done');
+
+    let closed = false;
+    const release = this.keepVisible(input);
+    const commit = () => {
+      if (closed) return;
+      closed = true;
+      release();
+      const text = input.value.trim();
+      input.remove();
+      this.week.notes[key] = text;
+      sub.textContent = text;
+      sub.hidden = false;
+      this.save();
+    };
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+    });
+    input.addEventListener('blur', commit);
+
+    sub.hidden = true;
+    gutter.appendChild(input);
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
   },
 
   /* ── 편집: 그어진 항목은 편집 불가 ───────────────────────── */
