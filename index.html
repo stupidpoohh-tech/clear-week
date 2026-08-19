@@ -21,8 +21,12 @@
     --rule-soft: #e8e5db;      /* 항목 사이 옅은 선 */
 
     /* 글자 크기 — 종이 플래너의 작은 손글씨에 가깝게 */
-    --item-font: 13px;         /* 요일 칸 항목 */
-    --free-font: 11px;         /* 자유 칸 항목 (더 좁으므로 한 단계 더) */
+    --item-font: 9.5pt;        /* 요일 칸 항목 */
+    --free-font: 9.5pt;        /* 자유 칸 항목 */
+
+    /* 항목 들여쓰기 — 라벨은 왼쪽 끝, 항목은 한 칸 안쪽 */
+    --indent: 16px;
+    --free-indent: 8px;        /* 자유 칸은 좁으므로 얕게 */
 
     /* 오른쪽 자유 칸 — 종이 플래너의 우측 여백 */
     --free-width: clamp(84px, 27%, 132px);
@@ -96,10 +100,11 @@
     min-height: 44px;
     display: flex;
     align-items: center;
-    padding: 10px 2px;
+    padding: 10px 2px 10px var(--indent);
     touch-action: pan-y;     /* 세로 = 스크롤(브라우저), 가로 = 긋기/지우기(JS) */
     cursor: default;
   }
+  .free .item { padding-left: var(--free-indent); }
   .item + .item { border-top: 1px solid var(--rule-soft); }
   .item-text { font-size: var(--item-font); line-height: 1.5; overflow-wrap: anywhere; }
   .strike-svg {
@@ -120,9 +125,10 @@
     width: 100%;
     border: none; background: none; font: inherit;
     font-size: var(--item-font); line-height: 1.5; color: var(--ink);
-    padding: 10px 2px; min-height: 44px;
+    padding: 10px 2px 10px var(--indent); min-height: 44px;
     -webkit-user-select: text; user-select: text;
   }
+  .free .entry { padding-left: var(--free-indent); }
   .entry:focus { outline: none; }
 </style>
 </head>
