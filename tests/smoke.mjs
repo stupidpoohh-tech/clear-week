@@ -169,6 +169,74 @@ check('지난 주는 열람 전용', await page.locator('.cell-label').first().e
 await page.locator('#next').click(); await page.waitForTimeout(400);
 check('원래 주로 복귀', await page.locator('#weekTitle').textContent(), title);
 
+console.log('\n── 넘친 항목 ──');
+/* 칸 높이가 고정이라 넘치면 잘린다. 잘렸다는 사실은 화면에 남아야 한다 */
+await page.evaluate(() => {
+  App.week.days.tue = ['회의자료 정리', '장보기', '은행', '약국', '세탁물 찾기',
+                       '전화하기', '운동', '독서', '정산', '메일 회신']
+    .map((text, i) => ({ id: 'ov' + i, text, struck: false, createdAt: 0, strikes: [] }));
+  App.save(); App.render();
+});
+await page.waitForTimeout(500);
+const markOf = key => page.evaluate(k => {
+  const m = App.cells[k].section.querySelector('.overflow-mark');
+  return m ? m.textContent : null;
+}, key);
+const over1 = await markOf('tue');
+check('칸이 넘치면 잘렸다고 표시', /^\+\d+$/.test(over1 || ''), true);
+check('넘치지 않는 칸엔 표시 없음', await markOf('mon'), null);
+await splitCell(1);
+check('나누면 숨은 항목이 줄어듦',
+  parseInt(await markOf('tue') || '+0', 10) < parseInt(over1, 10), true);
+
+console.log('\n── 백업 ──');
+check('평소엔 백업 줄이 닫혀 있음', await page.locator('#backup').isVisible(), false);
+const tbox = await page.locator('#weekTitle').boundingBox();
+await page.mouse.move(tbox.x + tbox.width / 2, tbox.y + tbox.height / 2);
+await page.mouse.down(); await page.waitForTimeout(680); await page.mouse.up();
+await page.waitForTimeout(300);
+check('제목 롱프레스로 백업 줄이 열림', await page.locator('#backup').isVisible(), true);
+
+const [download] = await Promise.all([
+  page.waitForEvent('download'),
+  page.locator('#exportBtn').click(),
+]);
+let dumpText = '';
+for await (const chunk of await download.createReadStream()) dumpText += chunk;
+const dump = JSON.parse(dumpText);
+check('내보낸 파일 이름', /^clear-week-\d{4}-\d{2}-\d{2}\.json$/.test(download.suggestedFilename()), true);
+check('저장된 주가 전부 파일에 들어감', Object.keys(dump.weeks).length, await page.evaluate(() =>
+  Object.keys(localStorage).filter(k => /^clearweek:\d{4}-W\d{2}$/.test(k)).length));
+
+/* 가져오기는 덮어쓰지 않는다 — 되돌리기가 없으므로 지우는 쪽으로 기울지 않는다 */
+const brought = await page.evaluate(txt => {
+  const data = JSON.parse(txt);
+  const id = Object.keys(data.weeks)[0];
+  data.weeks[id].days.mon = [{ id: 'zz', text: '덮어쓰기 시도', struck: false, createdAt: 0, strikes: [] }];
+  data.weeks['2019-W01'] = {
+    weekId: '2019-W01',
+    days: { mon: [{ id: 'old', text: '옛 주', struck: false, createdAt: 0, strikes: [] }] },
+    splits: {}, notes: {},
+  };
+  const before = localStorage.getItem('clearweek:' + id);
+  const r = importBackup(JSON.stringify(data));
+  return { r, untouched: localStorage.getItem('clearweek:' + id) === before,
+           filled: localStorage.getItem('clearweek:2019-W01') !== null };
+}, dumpText);
+check('없던 주만 채움', brought.r.added, 1);
+check('이미 있는 주는 그대로 둠', brought.untouched, true);
+check('가져온 주가 실제로 생김', brought.filled, true);
+check('백업 파일이 아니면 거절', await page.evaluate(() => importBackup('{"a":1}').error), 'Clear Week 백업 파일이 아님');
+check('깨진 파일은 거절', await page.evaluate(() => importBackup('nope').error), '읽을 수 없는 파일');
+
+console.log('\n── 저장 실패 ──');
+/* 사파리 사생활 모드처럼 저장이 막힌 상황 */
+await page.evaluate(() => { Storage.prototype.setItem = () => { throw new Error('blocked'); }; });
+await page.evaluate(() => App.save());
+await page.waitForTimeout(150);
+check('저장이 막히면 알린다', await page.locator('#note').isVisible(), true);
+check('알림 문구', /^저장 안 됨/.test(await page.locator('#note').textContent()), true);
+
 console.log('\n── 확대 차단 ──');
 check('확대 제스처 preventDefault', await page.evaluate(() =>
   ['gesturestart', 'gesturechange', 'gestureend'].every(t => {
