@@ -21,18 +21,21 @@
     --rule-soft: #e8e5db;      /* 항목 사이 옅은 선 */
 
     /* 글자 크기 — 종이 플래너의 작은 손글씨에 가깝게 */
-    --item-font: 9.5pt;        /* 요일 칸 항목 */
-    --free-font: 9.5pt;        /* 자유 칸 항목 */
+    --item-font: 9.5pt;
+    --free-font: 9.5pt;
 
-    /* 항목 들여쓰기 — 라벨은 왼쪽 끝, 항목은 한 칸 안쪽 */
-    --indent: 16px;
-    --free-indent: 8px;        /* 자유 칸은 좁으므로 얕게 */
+    /* 한 화면에 한 주가 다 들어가야 하므로 행은 촘촘하게 */
+    --item-height: 26px;       /* 항목 한 줄 높이 */
+    --label-w: 42px;           /* 요일 라벨이 차지하는 왼쪽 폭 = 들여쓰기 기준 */
+    --col-gap: 12px;           /* 셀을 나눴을 때 열 사이 간격 */
 
     /* 오른쪽 자유 칸 — 종이 플래너의 우측 여백 */
     --free-width: clamp(84px, 27%, 132px);
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body {
+  html { height: 100%; }
+  body {
+    position: fixed; inset: 0; overflow: hidden;   /* 페이지 스크롤 없음 */
     background: var(--paper);
     color: var(--ink);
     font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo",
@@ -42,71 +45,96 @@
     -webkit-touch-callout: none;
     -webkit-user-select: none;
     user-select: none;
-    overscroll-behavior-y: none;
+    overscroll-behavior: none;
   }
   main {
+    height: 100%;
     max-width: 560px;
     margin: 0 auto;
-    padding: calc(env(safe-area-inset-top, 0px) + 18px)
-             calc(env(safe-area-inset-right, 0px) + 20px)
-             calc(env(safe-area-inset-bottom, 0px) + 56px)
-             calc(env(safe-area-inset-left, 0px) + 20px);
+    display: flex;
+    flex-direction: column;
+    padding: calc(env(safe-area-inset-top, 0px) + 14px)
+             calc(env(safe-area-inset-right, 0px) + 18px)
+             calc(env(safe-area-inset-bottom, 0px) + 14px)
+             calc(env(safe-area-inset-left, 0px) + 18px);
+    transform: translateY(var(--kb-shift, 0px));   /* 키보드가 올라올 때만 밀림 */
   }
 
   /* ── 주 머리 ─────────────────────────────────────────────── */
   header {
+    flex: none;
     display: flex;
     align-items: baseline;
     justify-content: space-between;
-    padding-bottom: 12px;
+    padding-bottom: 8px;
     border-bottom: 1px solid var(--rule);
   }
-  header h1 { font-size: 16px; font-weight: 700; letter-spacing: 0.01em; }
-  header .nav { display: flex; gap: 4px; }
+  header h1 { font-size: 15px; font-weight: 700; }
+  header .nav { display: flex; gap: 2px; }
   header button {
     border: none; background: none; font: inherit;
-    font-size: 22px; line-height: 1; color: var(--ink);
-    width: 44px; height: 44px; cursor: pointer;
+    font-size: 20px; line-height: 1; color: var(--ink);
+    width: 40px; height: 36px; cursor: pointer;
   }
-  header button:disabled { color: var(--rule); }
-  .note {
-    margin-top: 8px; font-size: 12px; color: var(--ink-faint);
+  .note-line {
+    flex: none; font-size: 11px; color: var(--ink-faint); padding-top: 4px;
   }
+
+  /* ── 한 주 = 한 장. 스크롤 없이 화면에 고정 ───────────────── */
+  .week {
+    flex: 1 1 auto; min-height: 0;
+    display: grid;
+    grid-template-columns: 1fr var(--free-width);
+  }
+  .days {
+    min-height: 0; min-width: 0;
+    display: grid;
+    grid-template-rows: repeat(7, 1fr);
+  }
+  .free { min-height: 0; min-width: 0; border-left: 1px solid var(--rule); padding-left: 10px; }
 
   /* ── 칸 ──────────────────────────────────────────────────── */
-  /* 왼쪽 = 월~일 7칸(세로 스크롤), 오른쪽 = 요일 없는 자유 칸 1열 */
-  .week { display: grid; grid-template-columns: 1fr var(--free-width); }
-  .days, .free { min-width: 0; }
-  .free { border-left: 1px solid var(--rule); padding-left: 12px; }
-
-  .cell { padding: 8px 0 6px; }
-  .day { border-bottom: 1px solid var(--rule); }
+  .cell {
+    position: relative;
+    min-height: 0; min-width: 0;
+    overflow: hidden;
+    display: flex;
+    touch-action: none;      /* 가로 = 긋기, 세로 = 열 나누기. 스크롤 없음 */
+  }
+  .cell.day { flex-direction: row; border-bottom: 1px solid var(--rule); }
+  .cell.free-cell { flex-direction: column; }
 
   /* 라벨을 누르면 그 칸에 항목이 추가된다 (＋ 버튼 없음) */
   .cell-label {
-    display: block; width: 100%; text-align: left;
     border: none; background: none; font: inherit;
-    font-size: 11px; font-weight: 700; letter-spacing: 0.18em;
+    font-size: 10px; font-weight: 700; letter-spacing: 0.16em;
     color: var(--ink-faint);
-    padding: 8px 2px; min-height: 34px;
-    cursor: pointer;
+    text-align: left; cursor: pointer;
+    padding: 7px 0 0;
   }
-  .free .cell-label { letter-spacing: 0.06em; text-transform: none; }
-  .free .item-text, .free .entry { font-size: var(--free-font); }
+  .cell.day > .cell-label { flex: 0 0 var(--label-w); align-self: flex-start; }
+  .cell.free-cell > .cell-label { flex: none; letter-spacing: 0.06em; padding-bottom: 2px; }
+
+  /* 항목이 흐르는 영역. 열을 나누면 여기가 여러 단이 된다 */
+  .cell-body {
+    flex: 1 1 auto; min-width: 0; height: 100%;
+    column-gap: var(--col-gap);
+    column-fill: auto;
+    overflow: hidden;
+  }
 
   /* ── 항목 ────────────────────────────────────────────────── */
   .item {
     position: relative;
-    min-height: 44px;
+    min-height: var(--item-height);
     display: flex;
     align-items: center;
-    padding: 10px 2px 10px var(--indent);
-    touch-action: pan-y;     /* 세로 = 스크롤(브라우저), 가로 = 긋기/지우기(JS) */
+    padding: 3px 2px;
+    break-inside: avoid;
     cursor: default;
   }
-  .free .item { padding-left: var(--free-indent); }
-  .item + .item { border-top: 1px solid var(--rule-soft); }
-  .item-text { font-size: var(--item-font); line-height: 1.5; overflow-wrap: anywhere; }
+  .item-text { font-size: var(--item-font); line-height: 1.45; overflow-wrap: anywhere; }
+  .free .item-text, .free .entry { font-size: var(--free-font); }
   .strike-svg {
     position: absolute; inset: 0;
     width: 100%; height: 100%;
@@ -120,15 +148,21 @@
     100% { transform: scale(1, 1); }
   }
 
+  /* 셀을 나누는 세로 잉크선 */
+  .split-svg {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    overflow: visible; pointer-events: none;
+  }
+
   /* ── 입력 ────────────────────────────────────────────────── */
   .entry {
     width: 100%;
     border: none; background: none; font: inherit;
-    font-size: var(--item-font); line-height: 1.5; color: var(--ink);
-    padding: 10px 2px 10px var(--indent); min-height: 44px;
+    font-size: var(--item-font); line-height: 1.45; color: var(--ink);
+    padding: 3px 2px; min-height: var(--item-height);
     -webkit-user-select: text; user-select: text;
   }
-  .free .entry { padding-left: var(--free-indent); }
   .entry:focus { outline: none; }
 </style>
 </head>
@@ -141,8 +175,8 @@
       <button id="next" type="button" aria-label="다음 주">›</button>
     </div>
   </header>
-  <p class="note" id="note" hidden></p>
-  <div id="weekBody"></div>
+  <p class="note-line" id="note" hidden></p>
+  <div class="week" id="weekBody"></div>
 </main>
 
 <script>
@@ -266,6 +300,42 @@ function buildPathD(points, fraction = 1) {
   return 'M' + top.join('L') + 'L' + bot.join('L') + 'Z';
 }
 
+/* 세로획 — 굵기가 좌우로 벌어지는 채움 패스 */
+function buildVPathD(points, fraction = 1) {
+  const n = Math.max(0, Math.round(points.length * clamp(fraction, 0, 1)));
+  if (n < 2) return '';
+  const pts = points.slice(0, n);
+  const total = Math.abs(pts[pts.length - 1].y - pts[0].y);
+  if (total < 1) return '';
+
+  const left = [], right = [];
+  for (let i = 0; i < pts.length; i++) {
+    const q = pts[i];
+    const along = Math.abs(q.y - pts[0].y);
+    const taper = clamp(Math.min(along, total - along) / STROKE.taperLen, 0, 1);
+    const h = Math.max(0.3, q.w * (0.3 + 0.7 * Math.sqrt(taper))) / 2;
+    left.push((q.x - h).toFixed(1) + ',' + q.y.toFixed(1));
+    right.push((q.x + h).toFixed(1) + ',' + q.y.toFixed(1));
+  }
+  right.reverse();
+  return 'M' + left.join('L') + 'L' + right.join('L') + 'Z';
+}
+
+/* 세로획의 점 배열 */
+function makeVPoints(seed, x, y0, y1) {
+  const g = makeGrain(seed);
+  const mid = (STROKE.widthMin + STROKE.widthMax) / 2;
+  const pts = [];
+  for (let y = y0; y <= y1; y += 3) {
+    pts.push({
+      x: x + g.tilt * (y - y0) + g.noise(y),
+      y,
+      w: Math.max(0.5, mid * g.widthJitter(y)),
+    });
+  }
+  return pts;
+}
+
 /* span이 차지한 줄(line box)들의 사각형 — 두 줄 이상 감김 대응 */
 function lineRects(span) {
   const range = document.createRange();
@@ -294,6 +364,15 @@ function haptic(on) {
 const STORE_PREFIX = 'clearweek:';
 const DAY_KEYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun', 'free'];
 const WEEK_DAYS = DAY_KEYS.slice(0, 7);   /* 왼쪽 열에 세로로 쌓이는 요일 칸 */
+const MAX_SPLITS = 2;                     /* 한 칸을 최대 3단까지 나눌 수 있다 */
+const SPLIT = {
+  commitRatio: 0.55,   // 칸 높이의 이 비율 이상 그어야 열이 나뉜다
+  slopPx: 8,           // 세로 제스처로 인정할 최소 이동량 (px)
+  settleMs: 130,       // 그은 선이 열 경계로 스르륵 자리잡는 시간 (ms)
+  rewindMs: 200,       // 미달 시 되감기는 시간 (ms)
+  rubReversals: 3,     // 이만큼 문대면 선이 지워지고 열이 합쳐진다
+  rubDistance: 160,    // 판정 후 이만큼 더 문대면 완전히 지워짐 (px)
+};
 const DAY_LABELS = {
   mon: 'MON', tue: 'TUE', wed: 'WED', thu: 'THU',
   fri: 'FRI', sat: 'SAT', sun: 'SUN', free: 'note',  /* 8번째 칸 */
@@ -323,9 +402,9 @@ function weekTitle(monday) {
 }
 
 function blankWeek(weekId) {
-  const days = {};
-  DAY_KEYS.forEach(k => { days[k] = []; });
-  return { weekId, days };
+  const days = {}, splits = {};
+  DAY_KEYS.forEach(k => { days[k] = []; splits[k] = []; });
+  return { weekId, days, splits };
 }
 
 function loadWeek(weekId) {
@@ -336,6 +415,8 @@ function loadWeek(weekId) {
     const w = JSON.parse(raw);
     const week = blankWeek(weekId);
     DAY_KEYS.forEach(k => {
+      const sp = w.splits && Array.isArray(w.splits[k]) ? w.splits[k] : [];
+      week.splits[k] = sp.slice(0, MAX_SPLITS).map(v => v | 0);
       const list = w.days && Array.isArray(w.days[k]) ? w.days[k] : [];
       week.days[k] = list.map(it => ({
         id: it.id || String(++uidSeq),
@@ -453,12 +534,6 @@ class StrikeItem {
     this.el.addEventListener('pointercancel', () => this.onCancel());
     this.el.addEventListener('contextmenu', e => e.preventDefault());
 
-    /* 긋기/지우기 중엔 브라우저 스크롤을 막는다.
-       방향 미판정 구간도 막아 두고, 세로로 판정되면 그때부터 양보한다. */
-    this.el.addEventListener('touchmove', e => {
-      const p = this.pointer;
-      if (p && p.mode !== 'scroll') e.preventDefault();
-    }, { passive: false });
   }
 
   /* 저장된 획 복원 — 레이아웃이 끝난 뒤에 불러야 한다 */
@@ -504,6 +579,12 @@ class StrikeItem {
       });
     }
     return { el, points };
+  }
+
+  /* 화면이 다시 짜였을 때(열 나누기·회전) 획을 지우고 복원하기 위해 */
+  clearStrokes() {
+    this.strokes.forEach(s => { s.el.remove(); if (s.mask) s.mask.remove(); });
+    this.strokes = [];
   }
 
   strokeOnLine(i) { return this.strokes.find(s => s.lineIndex === i); }
@@ -556,7 +637,7 @@ class StrikeItem {
 
     if (!p.mode && Math.abs(dx) >= STROKE.slopPx) {
       if (Math.abs(dx) <= Math.abs(dy)) {
-        p.mode = 'scroll';                    // 세로 우세 → 브라우저에 양보
+        p.mode = 'pass';                      // 세로 우세 → 셀의 열 나누기로
       } else {
         const line = lineIndexAt(p.rects, p.startY);
         if (this.strokeOnLine(line)) {
@@ -566,7 +647,7 @@ class StrikeItem {
           p.mode = 'draw';
           this.beginDraw(p, line);
         } else {
-          p.mode = 'scroll';
+          p.mode = 'pass';
         }
       }
     }
@@ -590,7 +671,7 @@ class StrikeItem {
     Sound.silence();
 
     if (p.mode === 'draw') { this.finishDraw(p); return; }
-    if (p.mode === 'erase' || p.mode === 'scroll') return;
+    if (p.mode === 'erase' || p.mode === 'pass') return;
 
     if (p.moved >= 10) return;
 
@@ -877,7 +958,215 @@ class StrikeItem {
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   6. 화면 — 7+1 세로 1열. 라우팅 없음.
+   6. 칸 나누기 — 한 칸 안에서 세로선을 그으면 열이 하나 늘어난다.
+      한 주가 한 화면에 고정돼 있으므로, 더 쓰고 싶으면 칸을 나눈다.
+   ═══════════════════════════════════════════════════════════════ */
+class CellSplits {
+  constructor(cell, bodyEl, seeds, host) {
+    this.cell = cell;
+    this.body = bodyEl;
+    this.seeds = seeds;          // 저장된 세로선 시드 배열 (길이 = 나눈 횟수)
+    this.host = host;            // { readOnly, save(), relayout() }
+    this.svg = document.createElementNS(NS, 'svg');
+    this.svg.setAttribute('class', 'split-svg');
+    cell.appendChild(this.svg);
+    this.lines = [];             // [{ el, x }]
+    this.pointer = null;
+
+    cell.addEventListener('pointerdown', e => this.onDown(e));
+    cell.addEventListener('pointermove', e => this.onMove(e));
+    cell.addEventListener('pointerup', e => this.onUp(e));
+    cell.addEventListener('pointercancel', () => this.onCancel());
+  }
+
+  get count() { return this.seeds.length; }
+
+  /* 열 경계 x 좌표 — 셀 기준 */
+  boundaryX(i) {
+    const cols = this.count + 1;
+    const gap = parseFloat(getComputedStyle(this.body).columnGap) || 12;
+    const bodyLeft = this.body.offsetLeft;
+    const w = this.body.clientWidth;
+    const colW = (w - gap * (cols - 1)) / cols;
+    return bodyLeft + (i + 1) * colW + i * gap + gap / 2;
+  }
+
+  /* 열 수를 반영하고 선을 제자리에 그린다 */
+  layout() {
+    this.body.style.columnCount = String(this.count + 1);
+    this.lines.forEach(l => l.el.remove());
+    this.lines = [];
+    const h = this.cell.clientHeight;
+    this.seeds.forEach((seed, i) => {
+      const x = this.boundaryX(i);
+      const el = document.createElementNS(NS, 'path');
+      el.setAttribute('fill', STROKE.inkColor);
+      el.setAttribute('d', buildVPathD(makeVPoints(seed, x, 4, h - 4)));
+      this.svg.appendChild(el);
+      this.lines.push({ el, x, seed });
+    });
+  }
+
+  lineAt(x) {
+    let best = null, bd = Infinity;
+    for (const l of this.lines) {
+      const d = Math.abs(x - l.x);
+      if (d < bd) { bd = d; best = l; }
+    }
+    return best && bd <= 22 ? best : null;
+  }
+
+  /* ── 제스처 ──────────────────────────────────────────────── */
+  onDown(e) {
+    if (this.host.readOnly || this.pointer || this.busy) return;
+    const rect = this.cell.getBoundingClientRect();
+    this.pointer = {
+      id: e.pointerId, rect,
+      startX: e.clientX, startY: e.clientY,
+      lastX: e.clientX,
+      mode: null,               // null | split | rub | pass
+      seed: 0, active: null, minY: 0, maxY: 0,
+      dirX: 0, reversals: 0, rubbed: 0, from: 0,
+    };
+  }
+
+  onMove(e) {
+    const p = this.pointer;
+    if (!p || e.pointerId !== p.id) return;
+    const dx = e.clientX - p.startX;
+    const dy = e.clientY - p.startY;
+    const stepX = e.clientX - p.lastX;
+
+    if (!p.mode) {
+      if (Math.max(Math.abs(dx), Math.abs(dy)) < SPLIT.slopPx) { p.lastX = e.clientX; return; }
+      if (Math.abs(dy) > Math.abs(dx)) {
+        p.mode = this.count < MAX_SPLITS ? 'split' : 'pass';
+        if (p.mode === 'split') this.beginSplit(p, e);
+      } else {
+        const line = this.lineAt(p.startX - p.rect.left);
+        p.mode = line ? 'rub' : 'pass';
+        if (line) p.line = line;
+      }
+    }
+
+    if (p.mode === 'split') this.trackSplit(p, e);
+    else if (p.mode === 'rub') this.trackRub(p, stepX);
+    p.lastX = e.clientX;
+  }
+
+  onUp(e) {
+    const p = this.pointer;
+    if (!p || e.pointerId !== p.id) return;
+    this.pointer = null;
+    Sound.silence();
+    if (p.mode === 'split') this.finishSplit(p);
+    else if (p.mode === 'rub' && p.line && p.progress > 0 && p.progress < 1) {
+      p.line.el.setAttribute('opacity', '1');
+    }
+  }
+
+  onCancel() {
+    const p = this.pointer;
+    if (!p) return;
+    this.pointer = null;
+    Sound.silence();
+    if (p.mode === 'split' && p.active) this.rewind(p.active);
+  }
+
+  beginSplit(p, e) {
+    Sound.init(); Sound.resume();
+    p.seed = newSeed();
+    const el = document.createElementNS(NS, 'path');
+    el.setAttribute('fill', STROKE.inkColor);
+    el.setAttribute('fill-opacity', '0.88');
+    this.svg.appendChild(el);
+    p.active = el;
+    p.x = p.startX - p.rect.left;
+    p.minY = p.maxY = p.startY - p.rect.top;
+  }
+
+  trackSplit(p, e) {
+    const y = e.clientY - p.rect.top;
+    p.minY = Math.min(p.minY, y);
+    p.maxY = Math.max(p.maxY, y);
+    p.active.setAttribute('d',
+      buildVPathD(makeVPoints(p.seed, p.x, p.minY, p.maxY)));
+    Sound.scratch(0.6);
+  }
+
+  finishSplit(p) {
+    const h = Math.max(1, p.rect.height);
+    if ((p.maxY - p.minY) / h < SPLIT.commitRatio) { this.rewind(p.active); return; }
+
+    /* 확정 — 선이 열 경계로 자리잡고 칸이 나뉜다 */
+    this.busy = true;
+    haptic(STROKE.hapticOnCommit);
+    this.seeds.push(p.seed);
+    this.host.save();
+
+    const targetX = this.boundaryX(this.seeds.length - 1);
+    const cellH = this.cell.clientHeight;
+    const fromX = p.x, fromTop = p.minY, fromBot = p.maxY;
+    const t0 = performance.now();
+    const step = now => {
+      const t = easeOut(clamp((now - t0) / SPLIT.settleMs, 0, 1));
+      const x = fromX + (targetX - fromX) * t;
+      const y0 = fromTop + (4 - fromTop) * t;
+      const y1 = fromBot + ((cellH - 4) - fromBot) * t;
+      p.active.setAttribute('d', buildVPathD(makeVPoints(p.seed, x, y0, y1)));
+      if (t < 1) requestAnimationFrame(step);
+      else {
+        p.active.remove();
+        this.busy = false;
+        this.host.relayout();      // 열 수 반영 + 항목 재배치 + 획 복원
+      }
+    };
+    requestAnimationFrame(step);
+  }
+
+  rewind(el) {
+    if (!el) return;
+    const d = el.getAttribute('d');
+    const t0 = performance.now();
+    const step = now => {
+      const t = clamp((now - t0) / SPLIT.rewindMs, 0, 1);
+      el.setAttribute('opacity', String(1 - t));
+      if (t < 1) requestAnimationFrame(step);
+      else el.remove();
+    };
+    if (d) requestAnimationFrame(step); else el.remove();
+  }
+
+  /* 세로선을 문대면 열이 합쳐진다 */
+  trackRub(p, stepX) {
+    if (stepX !== 0) {
+      const dir = stepX > 0 ? 1 : -1;
+      if (dir !== p.dirX) {
+        p.dirX = dir;
+        p.reversals++;
+        if (p.reversals === SPLIT.rubReversals) p.from = p.rubbed;
+      }
+    }
+    p.rubbed += Math.abs(stepX);
+    Sound.init(); Sound.resume(); Sound.scratch(0.6);
+    if (p.reversals < SPLIT.rubReversals) return;
+
+    p.progress = clamp((p.rubbed - p.from) / SPLIT.rubDistance, 0, 1);
+    p.line.el.setAttribute('opacity', String(1 - p.progress));
+    if (p.progress >= 1) {
+      this.pointer = null;
+      Sound.silence();
+      haptic(ERASE.hapticOnErase);
+      const i = this.lines.indexOf(p.line);
+      if (i >= 0) this.seeds.splice(i, 1);
+      this.host.save();
+      this.host.relayout();
+    }
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   7. 화면 — 왼쪽 7칸 + 오른쪽 note. 한 주가 한 화면에 고정.
    ═══════════════════════════════════════════════════════════════ */
 const App = {
   monday: null,
@@ -889,6 +1178,33 @@ const App = {
     this.go(this.thisMonday);
     document.getElementById('prev').addEventListener('click', () => this.shift(-7));
     document.getElementById('next').addEventListener('click', () => this.shift(7));
+
+    /* 화면 크기가 바뀌면 열 경계와 획을 다시 맞춘다 */
+    let resizeTimer = null;
+    window.addEventListener('resize', () => {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => this.relayoutAll(), 120);
+    });
+  },
+
+  /* 스크롤이 없으므로, 키보드가 올라오면 화면을 그만큼만 밀어 올린다 */
+  keepVisible(el) {
+    const vv = window.visualViewport;
+    if (!vv) return () => {};
+    const adjust = () => {
+      const r = el.getBoundingClientRect();
+      const over = r.bottom + 12 - (vv.height + vv.offsetTop);
+      document.documentElement.style.setProperty(
+        '--kb-shift', over > 0 ? (-over) + 'px' : '0px');
+    };
+    adjust();
+    vv.addEventListener('resize', adjust);
+    vv.addEventListener('scroll', adjust);
+    return () => {
+      vv.removeEventListener('resize', adjust);
+      vv.removeEventListener('scroll', adjust);
+      document.documentElement.style.setProperty('--kb-shift', '0px');
+    };
   },
 
   shift(days) {
@@ -902,7 +1218,6 @@ const App = {
     this.readOnly = monday < this.thisMonday;      // 넘긴 페이지는 고쳐 쓰지 않는다
     this.week = loadWeek(isoWeekId(monday));
     this.render();
-    window.scrollTo(0, 0);
   },
 
   save() { saveWeek(this.week); },
@@ -915,33 +1230,30 @@ const App = {
 
     const body = document.getElementById('weekBody');
     body.innerHTML = '';
-    const pending = [];
+    this.cells = {};
 
-    const grid = document.createElement('div');
-    grid.className = 'week';
     const daysCol = document.createElement('div');
     daysCol.className = 'days';
     const freeCol = document.createElement('div');
     freeCol.className = 'free';
-    grid.appendChild(daysCol);
-    grid.appendChild(freeCol);
-    body.appendChild(grid);
+    body.appendChild(daysCol);
+    body.appendChild(freeCol);
 
-    WEEK_DAYS.forEach(key => daysCol.appendChild(this.buildCell(key, pending)));
-    freeCol.appendChild(this.buildCell('free', pending));
+    WEEK_DAYS.forEach(key => daysCol.appendChild(this.buildCell(key)));
+    freeCol.appendChild(this.buildCell('free'));
 
-    /* 레이아웃이 잡힌 뒤에 저장된 획을 되살린다 */
-    pending.forEach(item => item.restore());
+    /* 레이아웃이 잡힌 뒤에 열 수와 저장된 획을 반영한다 */
+    requestAnimationFrame(() => this.relayoutAll());
   },
 
-  buildCell(key, pending) {
+  buildCell(key) {
     const section = document.createElement('section');
-    section.className = key === 'free' ? 'cell' : 'cell day';
+    section.className = key === 'free' ? 'cell free-cell' : 'cell day';
 
     const listEl = document.createElement('div');
-    listEl.className = 'day-items';
+    listEl.className = 'cell-body';
 
-    /* 요일 라벨(과 자유 칸의 note)이 곧 입력 버튼이다 */
+    /* 요일 라벨(과 자유 칸의 note)이 곧 입력 버튼이자 들여쓰기 기준 */
     let label;
     if (this.readOnly) {
       label = document.createElement('div');
@@ -955,23 +1267,41 @@ const App = {
     section.appendChild(label);
     section.appendChild(listEl);
 
-    this.week.days[key].forEach(data => {
+    const items = this.week.days[key].map(data => {
       const item = this.makeItem(data, key, listEl);
       listEl.appendChild(item.el);
-      pending.push(item);
+      return item;
     });
+
+    const splits = new CellSplits(section, listEl, this.week.splits[key], {
+      readOnly: this.readOnly,
+      save: () => this.save(),
+      relayout: () => this.relayoutCell(key),
+    });
+
+    this.cells[key] = { section, listEl, items, splits };
     return section;
   },
 
   makeItem(data, dayKey, listEl) {
-    const host = {
+    return new StrikeItem(data, {
       readOnly: this.readOnly,
       save: () => this.save(),
       edit: item => this.editItem(item, dayKey, listEl),
       remove: item => this.removeItem(item, dayKey),
-    };
-    return new StrikeItem(data, host);
+    });
   },
+
+  relayoutCell(key) {
+    const cell = this.cells[key];
+    if (!cell) return;
+    cell.listEl.scrollLeft = 0;      // 입력 중 밀려 있던 가로 위치를 되돌린다
+    cell.listEl.scrollTop = 0;
+    cell.splits.layout();
+    cell.items.forEach(item => { item.clearStrokes(); item.restore(); });
+  },
+
+  relayoutAll() { Object.keys(this.cells).forEach(k => this.relayoutCell(k)); },
 
   /* ── 적기: 인라인 입력, 엔터로 연속 입력 ─────────────────── */
   openEntry(dayKey, listEl) {
@@ -987,10 +1317,14 @@ const App = {
     input.setAttribute('enterkeyhint', 'enter');
 
     let closed = false;
+    const release = this.keepVisible(input);
     const close = () => {
       if (closed) return;
       closed = true;
+      release();
       input.remove();
+      listEl.scrollLeft = 0;         // 넘친 항목은 칸을 나눠야 보인다
+      listEl.scrollTop = 0;
     };
 
     input.addEventListener('keydown', e => {
@@ -1008,6 +1342,7 @@ const App = {
 
       const item = this.makeItem(data, dayKey, listEl);
       listEl.insertBefore(item.el, input);    // 입력창은 늘 목록 맨 아래
+      if (this.cells[dayKey]) this.cells[dayKey].items.push(item);
       item.restore();
       input.value = '';                       // 다음 줄 입력창이 바로 이어짐
     });
@@ -1027,9 +1362,11 @@ const App = {
     input.setAttribute('enterkeyhint', 'done');
 
     let closed = false;
+    const release = this.keepVisible(input);
     const commit = () => {
       if (closed) return;
       closed = true;
+      release();
       const text = input.value.trim();
       input.remove();
       if (!text) { this.removeItem(item, dayKey); return; }
@@ -1058,6 +1395,11 @@ const App = {
     if (i >= 0) list.splice(i, 1);
     this.save();
     item.el.remove();
+    const cell = this.cells[dayKey];
+    if (cell) {
+      const j = cell.items.indexOf(item);
+      if (j >= 0) cell.items.splice(j, 1);
+    }
   },
 };
 
