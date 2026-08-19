@@ -99,9 +99,9 @@
   <header>
     <h1>Clear Week</h1>
     <p class="hint">
-      긋기 — 글자 위를 좌우로 드래그<br>
-      더블탭 — 자동으로 그어짐<br>
-      지우기 — 그어진 항목을 쓱싹쓱싹 문대기
+      긋기 — 글자 위를 좌우로 드래그 (줄마다 따로)<br>
+      더블탭 — 남은 줄까지 한 번에<br>
+      지우기 — 그어진 곳을 지우개처럼 쓱싹쓱싹 문대기
     </p>
   </header>
   <section class="list" id="list"></section>
@@ -115,44 +115,41 @@
    1. 획 파라미터 — 손맛 튜닝은 전부 여기서.
    ═══════════════════════════════════════════════════════════════ */
 const STROKE = {
-  /* ── 획 모양 ─────────────────────────────────────────────── */
-  noiseAmplitude: 0.9,   // 획 흔들림 진폭 (px). 올리면 더 삐뚤어짐
-  noiseFrequency: 0.018, // 흔들림 주기 (1/px). 올리면 잘게 지글거림
+  /* ── 획 모양 (거의 직선 + 아주 미세한 손떨림) ────────────── */
+  noiseAmplitude: 0.4,   // 획 흔들림 진폭 (px). 0이면 완전 직선
+  noiseFrequency: 0.012, // 흔들림 주기 (1/px). 올리면 잘게 지글거림
   widthMin: 1.6,         // 최소 굵기 (px) — 빠르게 그을 때
   widthMax: 3.2,         // 최대 굵기 (px) — 천천히 그을 때
   taperLen: 8,           // 양끝이 얇아지는 구간 길이 (px)
-  tiltMax: 0.02,         // 획 전체의 무작위 기울기 (dy/dx 최대값)
-  followY: 0.25,         // 손가락 상하 움직임 반영 비율 (0=수평 고정, 1=그대로)
+  tiltMax: 0.015,        // 획 전체의 무작위 기울기 (dy/dx 최대값)
+  followY: 0.15,         // 손가락 상하 움직임 반영 비율 (0=수평 고정)
   speedRef: 1.4,         // 이 속도(px/ms)에서 굵기가 widthMin까지 얇아짐
-  widthNoise: 0.06,      // 굵기 자체의 미세 흔들림 비율
+  widthNoise: 0.05,      // 굵기 자체의 미세 흔들림 비율
   widthNoiseFreq: 0.08,  // 굵기 흔들림 주기 (1/px)
   inkColor: '#26356b',   // 취소선 잉크색
 
   /* ── 판정 ────────────────────────────────────────────────── */
-  commitRatio: 0.6,      // 확정 임계값 (텍스트 폭 대비 통과 비율)
+  commitRatio: 0.6,      // 확정 임계값 (해당 줄 폭 대비 통과 비율)
   slopPx: 8,             // 긋기 vs 스크롤 초기 방향 판정 이동량 (px)
   doubleTapMs: 300,      // 더블탭 판정 간격 (ms)
   hapticOnCommit: true,  // 확정 시 진동 (iOS 사파리는 지원 안 함 → 무시됨)
 
-  /* ── 손으로 그은 획은 그은 만큼만 남는다 ─────────────────── */
-  //  확정돼도 손가락이 지나간 구간 밖으로는 늘어나지 않음.
-
-  /* ── 자동으로 그어지는 획 (감긴 나머지 줄, 더블탭) ───────── */
-  strikeAllLines: true,  // 두 줄 이상 감긴 항목은 나머지 줄도 자동으로 긋기
+  /* ── 더블탭 자동 긋기 ────────────────────────────────────── */
   overshoot: 2,          // 자동 획이 텍스트 밖으로 삐져나가는 양 (px)
   autoStrokeMs: 220,     // 자동 획 하나가 그어지는 시간 (ms)
   autoStagger: 70,       // 줄과 줄 사이 시차 (ms)
 
   /* ── 애니메이션 ──────────────────────────────────────────── */
   rewindMs: 200,         // 임계값 미달 시 선이 되감기는 시간 (ms)
-  restoreMs: 160,        // 지우다 만 획이 되살아나는 시간 (ms)
+  eraseFadeMs: 120,      // 다 지워진 획의 잔량이 사라지는 시간 (ms)
 };
 
-/* ── 문대서 지우기 ─────────────────────────────────────────── */
+/* ── 지우개 ────────────────────────────────────────────────── */
 const ERASE = {
-  minReversals: 3,       // 좌우 방향이 몇 번 바뀌면 '문지르기'로 판정
-  minSegment: 6,         // 방향 전환으로 인정할 최소 이동 거리 (px)
-  rubDistance: 320,      // 판정 후 이만큼 더 문대면 완전히 지워짐 (px)
+  radius: 16,            // 지우개 반경 (px) — 문지른 자리 주변이 지워짐
+  passStrength: 0.55,    // 한 번 지나갈 때 지워지는 정도 (0~1)
+  doneThreshold: 0.85,   // 전 구간 누적이 이 값을 넘으면 완전히 지워짐
+  bucketPx: 8,           // 지워짐 판정 구간 폭 (px)
   hapticOnErase: true,
 };
 
@@ -185,6 +182,7 @@ const TAU = Math.PI * 2;
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const easeOut = t => 1 - (1 - t) * (1 - t);
 const easeIn = t => t * t;
+let uidSeq = 0;
 
 function mulberry32(seed) {
   let a = seed >>> 0;
@@ -321,7 +319,7 @@ const Sound = {
 
 /* ═══════════════════════════════════════════════════════════════
    4. 항목 하나 = StrikeItem
-      상태: idle → (긋기) → struck → (문대기) → idle
+      줄마다 독립된 획. 그어진 줄은 지우개로 문대서 지운다.
    ═══════════════════════════════════════════════════════════════ */
 class StrikeItem {
   constructor(text, container) {
@@ -334,15 +332,17 @@ class StrikeItem {
 
     this.svg = document.createElementNS(NS, 'svg');
     this.svg.setAttribute('class', 'strike-svg');
+    this.defs = document.createElementNS(NS, 'defs');
+    this.inkG = document.createElementNS(NS, 'g');
+    this.svg.appendChild(this.defs);
+    this.svg.appendChild(this.inkG);
 
     this.el.appendChild(this.textEl);
     this.el.appendChild(this.svg);
     container.appendChild(this.el);
 
-    this.status = 'idle';       // idle | drawing | struck | animating
-    this.strokes = [];          // [{ el, points }]
-    this.active = null;         // 지금 손으로 그리는 중인 획
-    this.anim = null;
+    this.status = 'idle';       // idle | drawing | animating
+    this.strokes = [];          // 확정된 획 (줄당 최대 1개)
     this.pointer = null;
     this.lastTapAt = 0;
 
@@ -351,37 +351,26 @@ class StrikeItem {
     this.el.addEventListener('pointerup', e => this.onUp(e));
     this.el.addEventListener('pointercancel', () => this.onCancel());
     this.el.addEventListener('contextmenu', e => e.preventDefault());
+
+    /* 긋기/지우기 중엔 브라우저 스크롤을 막는다.
+       방향 미판정 구간(slopPx 이내)도 막아 두고, 세로로 판정되면
+       preventDefault를 멈춰 그때부터 브라우저가 스크롤을 가져간다. */
+    this.el.addEventListener('touchmove', e => {
+      const p = this.pointer;
+      if (p && p.mode !== 'scroll') e.preventDefault();
+    }, { passive: false });
   }
 
-  /* ── 획 관리 ─────────────────────────────────────────────── */
-  addStroke() {
-    const el = document.createElementNS(NS, 'path');
-    el.setAttribute('fill', STROKE.inkColor);
-    this.svg.appendChild(el);
-    const s = { el, points: [] };
-    this.strokes.push(s);
-    return s;
-  }
+  strokeOnLine(i) { return this.strokes.find(s => s.lineIndex === i); }
 
-  clearStrokes() {
-    this.strokes.forEach(s => s.el.remove());
-    this.strokes = [];
-    this.active = null;
-  }
-
-  draw(s, fraction = 1) { s.el.setAttribute('d', buildPathD(s.points, fraction)); }
-  setOpacity(v) { this.strokes.forEach(s => s.el.setAttribute('fill-opacity', v)); }
-
-  animate(ms, fn, done) {
-    if (this.anim) cancelAnimationFrame(this.anim);
-    const t0 = performance.now();
-    const step = now => {
-      const t = clamp((now - t0) / ms, 0, 1);
-      fn(t);
-      if (t < 1) this.anim = requestAnimationFrame(step);
-      else { this.anim = null; if (done) done(); }
-    };
-    this.anim = requestAnimationFrame(step);
+  /* 손가락 y에 걸친 획 (지우개용) */
+  strokeAt(y) {
+    let best = null, bd = Infinity;
+    for (const s of this.strokes) {
+      const d = Math.abs(y - s.cy);
+      if (d < bd) { bd = d; best = s; }
+    }
+    return best && bd <= best.halfH + 14 ? best : null;
   }
 
   /* ── 제스처 ──────────────────────────────────────────────── */
@@ -393,12 +382,14 @@ class StrikeItem {
     this.pointer = {
       id: e.pointerId,
       rowRect: this.el.getBoundingClientRect(),
+      rects: lineRects(this.textEl),
       startX: e.clientX, startY: e.clientY,
       lastX: e.clientX, lastY: e.clientY, lastT: e.timeStamp,
       moved: 0, speed: 0,
-      mode: null,                       // null | draw | erase | scroll
-      dir: 0, seg: 0, reversals: 0,     // 문지르기 판정
-      rubbed: 0, eraseFrom: 0, progress: 0,
+      mode: null,               // null | draw | erase | scroll
+      /* draw */ active: null, grain: null,
+      /* erase */ dirX: 0, trail: null, trailStroke: null,
+      trailD: '', passTouched: null,
     };
   }
 
@@ -406,23 +397,25 @@ class StrikeItem {
     const p = this.pointer;
     if (!p || e.pointerId !== p.id) return;
 
-    const step = e.clientX - p.lastX;
+    const stepX = e.clientX - p.lastX;
     const dt = Math.max(1, e.timeStamp - p.lastT);
-    p.speed = p.speed * 0.75 + (Math.abs(step) / dt) * 0.25;
+    p.speed = p.speed * 0.75 + (Math.abs(stepX) / dt) * 0.25;
 
     const dx = e.clientX - p.startX;
     const dy = e.clientY - p.startY;
     p.moved = Math.max(p.moved, Math.hypot(dx, dy));
 
-    if (!p.mode) {
-      if (Math.abs(dx) >= STROKE.slopPx) {
-        if (Math.abs(dx) <= Math.abs(dy)) {
-          p.mode = 'scroll';                 // 세로 우세 → 브라우저 스크롤에 양보
-        } else if (this.status === 'struck') {
+    if (!p.mode && Math.abs(dx) >= STROKE.slopPx) {
+      if (Math.abs(dx) <= Math.abs(dy)) {
+        p.mode = 'scroll';                    // 세로 우세 → 브라우저에 양보
+      } else {
+        const line = lineIndexAt(p.rects, p.startY);
+        if (this.strokeOnLine(line)) {
           p.mode = 'erase';
+          p.passTouched = new Set();
         } else if (this.status === 'idle') {
           p.mode = 'draw';
-          this.beginDraw(p);
+          this.beginDraw(p, line);
         } else {
           p.mode = 'scroll';
         }
@@ -433,7 +426,7 @@ class StrikeItem {
       this.addSample(p, e.clientX, e.clientY);
       Sound.scratch(p.speed);
     } else if (p.mode === 'erase') {
-      this.trackRub(p, step);
+      this.trackErase(p, e.clientX - p.rowRect.left, e.clientY - p.rowRect.top, stepX);
       Sound.scratch(p.speed);
     }
 
@@ -447,11 +440,7 @@ class StrikeItem {
     Sound.silence();
 
     if (p.mode === 'draw') { this.finishDraw(p); return; }
-
-    if (p.mode === 'erase') {
-      if (p.progress > 0 && p.progress < 1) this.restore();
-      return;
-    }
+    if (p.mode === 'erase') return;           // 지운 만큼 그대로 남는다
 
     /* 탭 → 더블탭 판정 */
     if (this.status === 'idle' && p.moved < 10) {
@@ -470,39 +459,39 @@ class StrikeItem {
     if (!p) return;
     this.pointer = null;
     Sound.silence();
-    if (p.mode === 'draw') this.rewind(() => { this.status = 'idle'; });
-    else if (p.mode === 'erase' && p.progress > 0) this.restore();
+    if (p.mode === 'draw') this.rewind(p.active, () => { this.status = 'idle'; });
   }
 
   /* ── 긋기 ────────────────────────────────────────────────── */
-  beginDraw(p) {
+  beginDraw(p, lineIdx) {
     this.status = 'drawing';
-    this.grain = makeGrain((Math.random() * 2147483647) | 0);
-
-    p.rects = lineRects(this.textEl);
-    p.lineIndex = lineIndexAt(p.rects, p.startY);
-    const line = p.rects[p.lineIndex];
+    p.grain = makeGrain((Math.random() * 2147483647) | 0);
+    p.lineIndex = lineIdx;
+    const line = p.rects[lineIdx];
 
     p.lineLeft = line.left - p.rowRect.left;
     p.lineRight = line.right - p.rowRect.left;
     p.lineWidth = Math.max(1, line.width);
     p.baseY = (line.top + line.bottom) / 2 - p.rowRect.top;
+    p.halfH = (line.bottom - line.top) / 2;
     p.originX = p.startX - p.rowRect.left;
     p.originY = p.startY;
     p.minX = Infinity; p.maxX = -Infinity;
 
-    this.clearStrokes();
-    this.active = this.addStroke();
-    this.active.el.setAttribute('fill-opacity', '0.88');   // 긋는 동안 살짝 옅게
+    const el = document.createElementNS(NS, 'path');
+    el.setAttribute('fill', STROKE.inkColor);
+    el.setAttribute('fill-opacity', '0.88');   // 긋는 동안 살짝 옅게
+    this.inkG.appendChild(el);
+    p.active = { el, points: [] };
     this.addSample(p, p.startX, p.startY);
   }
 
   /* 손가락 샘플 → 3px 간격으로 보간해서 점 추가 */
   addSample(p, clientX, clientY) {
-    const s = this.active;
+    const s = p.active;
     if (!s) return;
     const x = clientX - p.rowRect.left;
-    const g = this.grain;
+    const g = p.grain;
     const fingerDy = (clientY - p.originY) * STROKE.followY;
     const wBase = STROKE.widthMax -
       (STROKE.widthMax - STROKE.widthMin) * clamp(p.speed / STROKE.speedRef, 0, 1);
@@ -523,156 +512,212 @@ class StrikeItem {
     }
     p.minX = Math.min(p.minX, x);
     p.maxX = Math.max(p.maxX, x);
-    this.draw(s);
+    s.el.setAttribute('d', buildPathD(s.points));
   }
 
   finishDraw(p) {
     const covered = Math.max(0,
       Math.min(p.maxX, p.lineRight) - Math.max(p.minX, p.lineLeft));
-    if (covered / p.lineWidth >= STROKE.commitRatio) this.commit(p);
-    else this.rewind(() => { this.status = 'idle'; });
+    if (covered / p.lineWidth >= STROKE.commitRatio) this.commitLine(p);
+    else this.rewind(p.active, () => { this.status = 'idle'; });
   }
 
-  /* 확정 — 손으로 그은 획은 그은 그대로 두고,
-     감겨 있는 나머지 줄만 자동으로 그어 채운다. */
-  commit(p) {
-    this.status = 'animating';
-    this.active.el.setAttribute('fill-opacity', '1');
+  /* 확정 — 손이 지나간 만큼만, 그 줄에만 남는다 */
+  commitLine(p) {
+    p.active.el.setAttribute('fill-opacity', '1');
     haptic(STROKE.hapticOnCommit);
-
-    const others = [];
-    if (STROKE.strikeAllLines) {
-      p.rects.forEach((r, i) => {
-        if (i !== p.lineIndex) others.push(this.buildAutoStroke(r, p.rowRect));
-      });
-    }
-    if (!others.length) { this.settle(); return; }
-
-    others.forEach(s => this.draw(s, 0));
-    const total = STROKE.autoStrokeMs + STROKE.autoStagger * (others.length - 1);
-    Sound.scratch(0.5);
-    this.animate(total, t => {
-      const ms = t * total;
-      others.forEach((s, i) => {
-        const local = clamp((ms - i * STROKE.autoStagger) / STROKE.autoStrokeMs, 0, 1);
-        this.draw(s, easeOut(local));
-      });
-    }, () => { Sound.silence(); this.settle(); });
+    this.registerStroke(p.active, p.lineIndex, p.baseY, p.halfH);
+    this.status = 'idle';
+    this.settle();
   }
 
-  /* 한 줄을 왼→오로 가득 채우는 자동 획 */
-  buildAutoStroke(rect, rowRect) {
-    const g = makeGrain((Math.random() * 2147483647) | 0);
-    const left = rect.left - rowRect.left - STROKE.overshoot;
-    const right = rect.right - rowRect.left + STROKE.overshoot;
-    const baseY = (rect.top + rect.bottom) / 2 - rowRect.top;
-    const span = Math.max(1, right - left);
-
-    const s = this.addStroke();
-    s.el.setAttribute('fill-opacity', '1');
-    for (let x = left; x <= right; x += 3) {
-      const profile = Math.pow(Math.sin(Math.PI * clamp((x - left) / span, 0, 1)), 0.6);
-      const w = STROKE.widthMin * 1.1 +
-        (STROKE.widthMax * 0.9 - STROKE.widthMin * 1.1) * profile;
-      s.points.push({
-        x,
-        y: baseY + g.tilt * (x - left) + g.noise(x),
-        w: Math.max(0.5, w * g.widthJitter(x)),
-      });
+  registerStroke(active, lineIndex, cy, halfH) {
+    let minX = Infinity, maxX = -Infinity;
+    for (const pt of active.points) {
+      if (pt.x < minX) minX = pt.x;
+      if (pt.x > maxX) maxX = pt.x;
     }
-    return s;
+    this.strokes.push({
+      uid: ++uidSeq,
+      el: active.el, points: active.points,
+      lineIndex, cy, halfH, minX, maxX,
+      mask: null, buckets: null,
+    });
   }
 
   settle() {
-    this.status = 'struck';
     this.el.classList.remove('pulse');
     void this.el.offsetWidth;
     this.el.classList.add('pulse');
   }
 
-  /* ── 더블탭: 모든 줄을 자동으로 긋기 ─────────────────────── */
-  autoStrike() {
+  /* ── 임계값 미달: 끝에서부터 되감기 ──────────────────────── */
+  rewind(active, done) {
+    if (!active) { if (done) done(); return; }
     this.status = 'animating';
+    const t0 = performance.now();
+    const step = now => {
+      const t = clamp((now - t0) / STROKE.rewindMs, 0, 1);
+      active.el.setAttribute('d', buildPathD(active.points, 1 - easeIn(t)));
+      if (t < 1) requestAnimationFrame(step);
+      else { active.el.remove(); if (done) done(); }
+    };
+    requestAnimationFrame(step);
+  }
+
+  /* ── 더블탭: 아직 안 그어진 줄을 전부 자동으로 긋기 ──────── */
+  autoStrike() {
     const rowRect = this.el.getBoundingClientRect();
     const rects = lineRects(this.textEl);
-    if (!rects.length) { this.status = 'idle'; return; }
+    const targets = [];
+    rects.forEach((r, i) => { if (!this.strokeOnLine(i)) targets.push([r, i]); });
+    if (!targets.length) return;
 
-    this.clearStrokes();
-    const strokes = rects.map(r => this.buildAutoStroke(r, rowRect));
-    strokes.forEach(s => this.draw(s, 0));
-
-    const total = STROKE.autoStrokeMs + STROKE.autoStagger * (strokes.length - 1);
-    Sound.init(); Sound.resume(); Sound.scratch(0.5);
-    this.animate(total, t => {
-      const ms = t * total;
-      strokes.forEach((s, i) => {
-        const local = clamp((ms - i * STROKE.autoStagger) / STROKE.autoStrokeMs, 0, 1);
-        this.draw(s, easeOut(local));
-      });
-    }, () => {
-      Sound.silence();
-      haptic(STROKE.hapticOnCommit);
-      this.settle();
-    });
-  }
-
-  /* ── 임계값 미달: 끝에서부터 되감기 ──────────────────────── */
-  rewind(done) {
     this.status = 'animating';
-    const s = this.active;
-    if (!s) { this.clearStrokes(); if (done) done(); return; }
-    this.animate(STROKE.rewindMs, t => this.draw(s, 1 - easeIn(t)), () => {
-      this.clearStrokes();
-      if (done) done();
+    const made = targets.map(([r, i]) => {
+      const g = makeGrain((Math.random() * 2147483647) | 0);
+      const left = r.left - rowRect.left - STROKE.overshoot;
+      const right = r.right - rowRect.left + STROKE.overshoot;
+      const baseY = (r.top + r.bottom) / 2 - rowRect.top;
+      const span = Math.max(1, right - left);
+
+      const el = document.createElementNS(NS, 'path');
+      el.setAttribute('fill', STROKE.inkColor);
+      this.inkG.appendChild(el);
+      const points = [];
+      for (let x = left; x <= right; x += 3) {
+        const profile = Math.pow(Math.sin(Math.PI * clamp((x - left) / span, 0, 1)), 0.6);
+        const w = STROKE.widthMin * 1.1 +
+          (STROKE.widthMax * 0.9 - STROKE.widthMin * 1.1) * profile;
+        points.push({
+          x,
+          y: baseY + g.tilt * (x - left) + g.noise(x),
+          w: Math.max(0.5, w * g.widthJitter(x)),
+        });
+      }
+      return { active: { el, points }, lineIndex: i, cy: baseY,
+               halfH: (r.bottom - r.top) / 2 };
     });
+
+    const total = STROKE.autoStrokeMs + STROKE.autoStagger * (made.length - 1);
+    Sound.init(); Sound.resume(); Sound.scratch(0.5);
+    const t0 = performance.now();
+    const step = now => {
+      const ms = clamp(now - t0, 0, total);
+      made.forEach((m, i) => {
+        const local = clamp((ms - i * STROKE.autoStagger) / STROKE.autoStrokeMs, 0, 1);
+        m.active.el.setAttribute('d', buildPathD(m.active.points, easeOut(local)));
+      });
+      if (ms < total) requestAnimationFrame(step);
+      else {
+        Sound.silence();
+        haptic(STROKE.hapticOnCommit);
+        made.forEach(m => this.registerStroke(m.active, m.lineIndex, m.cy, m.halfH));
+        this.status = 'idle';
+        this.settle();
+      }
+    };
+    requestAnimationFrame(step);
   }
 
-  /* ── 문대서 지우기 ───────────────────────────────────────── */
-  trackRub(p, step) {
-    if (step !== 0) {
-      const dir = step > 0 ? 1 : -1;
-      if (p.dir === 0) { p.dir = dir; p.seg = Math.abs(step); }
-      else if (dir === p.dir) { p.seg += Math.abs(step); }
-      else {
-        if (p.seg >= ERASE.minSegment) {
-          p.reversals++;
-          if (p.reversals === ERASE.minReversals) p.eraseFrom = p.rubbed;
-        }
-        p.dir = dir; p.seg = Math.abs(step);
+  /* ── 지우개: 문지른 자리만 잉크가 벗겨진다 ───────────────── */
+  ensureErasable(s) {
+    if (s.mask) return;
+    const id = 'cw-mask-' + s.uid;
+    const mask = document.createElementNS(NS, 'mask');
+    mask.setAttribute('id', id);
+    mask.setAttribute('maskUnits', 'userSpaceOnUse');
+    mask.setAttribute('x', '-500'); mask.setAttribute('y', '-500');
+    mask.setAttribute('width', '3000'); mask.setAttribute('height', '3000');
+    const rect = document.createElementNS(NS, 'rect');
+    rect.setAttribute('x', '-500'); rect.setAttribute('y', '-500');
+    rect.setAttribute('width', '3000'); rect.setAttribute('height', '3000');
+    rect.setAttribute('fill', '#fff');
+    mask.appendChild(rect);
+    this.defs.appendChild(mask);
+    s.mask = mask;
+    s.el.setAttribute('mask', 'url(#' + id + ')');
+    s.buckets = new Float32Array(
+      Math.max(1, Math.ceil((s.maxX - s.minX) / ERASE.bucketPx)));
+  }
+
+  newTrail(s) {
+    const t = document.createElementNS(NS, 'path');
+    t.setAttribute('fill', 'none');
+    t.setAttribute('stroke', '#000');
+    t.setAttribute('stroke-opacity', String(ERASE.passStrength));
+    t.setAttribute('stroke-width', String(ERASE.radius * 2));
+    t.setAttribute('stroke-linecap', 'round');
+    t.setAttribute('stroke-linejoin', 'round');
+    s.mask.appendChild(t);
+    return t;
+  }
+
+  trackErase(p, x, y, stepX) {
+    /* 좌우 방향이 바뀌면 새 패스 — 같은 자리를 오갈수록 더 지워진다 */
+    if (stepX !== 0) {
+      const dir = stepX > 0 ? 1 : -1;
+      if (dir !== p.dirX) {
+        p.dirX = dir;
+        p.trail = null;
+        p.passTouched = new Set();
       }
     }
-    p.rubbed += Math.abs(step);
 
-    if (p.reversals < ERASE.minReversals) return;
+    const s = this.strokeAt(y);
+    if (!s) { p.trail = null; p.trailStroke = null; return; }
+    this.ensureErasable(s);
 
-    p.progress = clamp((p.rubbed - p.eraseFrom) / ERASE.rubDistance, 0, 1);
-    this.setOpacity(1 - p.progress);
-
-    if (p.progress >= 1) {
-      this.pointer = null;
-      Sound.silence();
-      haptic(ERASE.hapticOnErase);
-      this.clearStrokes();
-      this.status = 'idle';
+    if (!p.trail || p.trailStroke !== s) {
+      p.trail = this.newTrail(s);
+      p.trailStroke = s;
+      p.trailD = 'M' + x.toFixed(1) + ' ' + y.toFixed(1);
+    } else {
+      p.trailD += 'L' + x.toFixed(1) + ' ' + y.toFixed(1);
     }
+    p.trail.setAttribute('d', p.trailD);
+
+    /* 지워진 정도 누적 (패스당 구간별 1회) */
+    const i0 = clamp(Math.floor((x - ERASE.radius - s.minX) / ERASE.bucketPx),
+                     0, s.buckets.length - 1);
+    const i1 = clamp(Math.floor((x + ERASE.radius - s.minX) / ERASE.bucketPx),
+                     0, s.buckets.length - 1);
+    for (let i = i0; i <= i1; i++) {
+      const key = s.uid + ':' + i;
+      if (!p.passTouched.has(key)) {
+        p.passTouched.add(key);
+        s.buckets[i] += ERASE.passStrength;
+      }
+    }
+
+    /* 전 구간이 문질러졌으면 완전히 지운다 */
+    for (let i = 0; i < s.buckets.length; i++) {
+      if (s.buckets[i] < ERASE.doneThreshold) return;
+    }
+    p.trail = null; p.trailStroke = null;
+    this.removeStroke(s);
   }
 
-  /* 지우다 만 획은 되살아난다 */
-  restore() {
-    this.status = 'animating';
-    const from = parseFloat(this.strokes[0] &&
-      this.strokes[0].el.getAttribute('fill-opacity')) || 0;
-    this.animate(STROKE.restoreMs,
-      t => this.setOpacity(from + (1 - from) * t),
-      () => { this.setOpacity(1); this.status = 'struck'; });
+  removeStroke(s) {
+    haptic(ERASE.hapticOnErase);
+    const idx = this.strokes.indexOf(s);
+    if (idx >= 0) this.strokes.splice(idx, 1);
+    const t0 = performance.now();
+    const step = now => {
+      const t = clamp((now - t0) / STROKE.eraseFadeMs, 0, 1);
+      s.el.setAttribute('opacity', String(1 - t));
+      if (t < 1) requestAnimationFrame(step);
+      else { s.el.remove(); if (s.mask) s.mask.remove(); }
+    };
+    requestAnimationFrame(step);
   }
 
   reset() {
-    if (this.anim) cancelAnimationFrame(this.anim);
-    this.anim = null;
     this.pointer = null;
-    this.clearStrokes();
     this.status = 'idle';
+    this.strokes = [];
+    this.inkG.innerHTML = '';
+    this.defs.innerHTML = '';
   }
 }
 
