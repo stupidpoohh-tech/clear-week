@@ -30,7 +30,7 @@ const TYPES = { '.html': 'text/html', '.png': 'image/png', '.webmanifest': 'appl
 /* ── 모의 서버 — Pages Functions 자리를 대신한다 ─────────────
    KV·메일은 흉내만 낸다. 합치기와 주고받는 모양은 진짜와 같다. */
 const api = { weeks: {}, sessions: new Map(), codes: new Map(), lastCode: null, resetAt: 0,
-              log: [], logRaw: [], logOff: false };
+              log: [], logRaw: [], logOff: false, syncDelay: 0 };
 const readBody = req => new Promise(r => {
   let b = ''; req.on('data', c => (b += c)); req.on('end', () => { try { r(JSON.parse(b || '{}')); } catch { r({}); } });
 });
@@ -98,6 +98,8 @@ async function handleApi(req, res, url) {
     const merged = mergeWeek(sanitizeWeek(b.week, id),
       api.weeks[id] ? sanitizeWeek(api.weeks[id], id) : blankWeek(id));
     api.weeks[id] = merged;
+    /* 느리게 대답하게 해서 "오가는 사이"를 넓힌다 */
+    if (api.syncDelay) await new Promise(r => setTimeout(r, api.syncDelay));
     return send(res, 200, { week: merged, resetAt: api.resetAt });
   }
 
@@ -739,6 +741,50 @@ await phone.evaluate(() => Sync.push());
 await phone.waitForTimeout(600);
 check('지운 것이 되살아나지 않는다',
   await phone.evaluate(() => App.week.days.mon.map(i => i.text)), ['PC에서 적음']);
+
+/* 밀어 올리는 중에 그은 획이 사라지던 일 (2026-08-20).
+   올린 것에는 없는 획이 응답에 없으니, 그 응답을 그대로 받으면 획이 지워졌다.
+   연달아 그을 때 두 번째부터 사라지던 것이 이것이다. */
+{
+  api.syncDelay = 700;
+  /* mon은 뒤의 로그아웃 검사가 들여다본다 — 건드리지 않는 칸에서 잰다 */
+  await page.evaluate(() => {
+    const now = Date.now();
+    App.week.days.tue = ['하나', '둘', '셋'].map((text, i) => ({
+      id: 'race-' + i, text, struck: false, createdAt: now + i, updatedAt: now + i, strikes: [],
+    }));
+    App.save(); App.render();
+  });
+  await page.waitForTimeout(1800);
+
+  /* 앞 절이 tue에 남긴 것이 있을 수 있다 — 내가 넣은 것만 골라 잰다 */
+  const strikeById = async id => {
+    const r = await page.evaluate(want => {
+      const it = App.cells.tue.items.find(v => v.data.id === want);
+      const q = document.createRange(); q.selectNodeContents(it.textEl);
+      const x = Array.from(q.getClientRects()).filter(v => v.width > 1)[0];
+      return { x: x.x, y: x.y, w: x.width, h: x.height };
+    }, id);
+    const y = r.y + r.h / 2;
+    await page.mouse.move(r.x + 1, y); await page.mouse.down();
+    for (let i = 1; i <= 12; i++) { await page.mouse.move(r.x + 1 + r.w * 0.95 * (i / 12), y); await page.waitForTimeout(6); }
+    await page.mouse.up();
+  };
+  const strikeCounts = () => page.evaluate(() =>
+    App.week.days.tue.filter(i => String(i.id).startsWith('race-')).map(i => i.strikes.length));
+
+  await strikeById('race-0');
+  await page.waitForTimeout(950);       // 올리기가 막 떠난 시점
+  await strikeById('race-1');           // 응답이 오기 전에 다음 획
+  await strikeById('race-2');
+  check('연달아 그으면 그 자리에 다 남는다', await strikeCounts(), [1, 1, 1]);
+  await page.waitForTimeout(3000);      // 응답 도착 + 다시 올리기까지
+  check('올리는 중에 그은 획이 응답에 지워지지 않는다', await strikeCounts(), [1, 1, 1]);
+  check('그 획들이 서버에도 올라간다',
+    Object.values(api.weeks).some(w =>
+      w.days.tue.filter(i => String(i.id).startsWith('race-') && i.strikes.length).length === 3), true);
+  api.syncDelay = 0;
+}
 
 await openDrawer(page);
 await page.locator('#logoutBtn').click();

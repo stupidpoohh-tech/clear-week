@@ -1075,6 +1075,8 @@ const Sync = {
     try {
       const week = this.host.currentWeek();
       if (!week) return;
+      /* 무엇을 보내는지 함께 적어 둔다. 오가는 동안 손이 더 움직일 수 있다. */
+      const sentRev = this.host.rev;
       const out = await this.call('/api/sync', {
         method: 'POST',
         body: JSON.stringify({ weekId: week.weekId, week, resetAt: localResetAt() }),
@@ -1082,6 +1084,11 @@ const Sync = {
       /* 비워진 것을 여기서 알게 될 수 있다 — 내 사본을 지우고,
          서버가 돌려준 것을 그대로 받는다. 그것이 새 출발점이다. */
       this.host.applyReset(out.resetAt);
+      /* **보내는 사이에 더 고쳤으면 받은 것은 이미 낡았다.**
+         그대로 받으면 그 사이에 그은 획이 사라진다 — 연달아 그을 때
+         두 번째부터 지워지던 것이 이것이었다 (spec §11).
+         덮어쓰지 않고 물러난 뒤, 지금 것을 다시 올린다. */
+      if (this.host.rev !== sentRev) { this.mark(''); this.schedule(); return; }
       if (out.week) this.host.adopt(out.week);
       this.mark('');
     } catch (e) {
@@ -1845,6 +1852,9 @@ const App = {
   monday: null,
   week: null,
   guideOn: false,
+  /* 사람이 이 기기에서 고친 횟수. 서버에 올린 뒤 이 값이 달라졌으면
+     돌아온 응답은 이미 낡은 것이다 (spec §11 — 밀어 올리는 중의 획). */
+  rev: 0,
 
   init() {
     /* 로그를 맨 먼저 켠다 — 바로 아래 probe()가 save_fail을 낼 수 있고,
@@ -1925,6 +1935,7 @@ const App = {
 
   save() {
     if (this.guideOn) return;      // 표본은 저장도 동기화도 하지 않는다
+    this.rev++;                    // 고친 것이 하나 늘었다
     saveWeek(this.week);
     Sync.schedule();
   },
