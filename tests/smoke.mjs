@@ -904,6 +904,73 @@ check('타자 소리와 깨우기가 있다', await page.evaluate(() =>
   await page.waitForTimeout(200);
 }
 
+/* 톡과 사각사각의 균형 — 적힌 숫자는 두 소리를 비교해 주지 않는다.
+   `keyVolume`이 `volume`보다 큰데도 18 dB 작게 들리던 적이 있다(spec §4-5).
+   그래서 신호를 실제로 돌려, 귀가 한 덩어리로 듣는 200ms 창으로 잰다.
+   여기 신호 경로는 index.html의 `Sound`를 베낀 것이다 — 한쪽을 고치면 같이 고칠 것. */
+{
+  const gap = await page.evaluate(async () => {
+    const SR = 48000;
+    const cut = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+    const noise = ctx => {
+      const len = Math.floor(ctx.sampleRate * 2);
+      const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+      const d = buf.getChannelData(0);
+      let brown = 0;
+      for (let i = 0; i < len; i++) {
+        const w = Math.random() * 2 - 1;
+        brown = (brown + 0.02 * w) / 1.02;
+        d[i] = cut(w * 0.75 + brown * 2.5, -1, 1);
+      }
+      return buf;
+    };
+    /* 200ms 창에서 가장 큰 실효값 — 짧은 소리는 창을 다 못 채워 작게 나온다 */
+    const loud = a => {
+      const n = Math.floor(SR * 0.2);
+      let best = 0;
+      for (let i = 0; i + n <= a.length; i += Math.floor(n / 8)) {
+        let e = 0;
+        for (let j = i; j < i + n; j++) e += a[j] * a[j];
+        best = Math.max(best, Math.sqrt(e / n));
+      }
+      return best;
+    };
+
+    /* 사각사각 — 가장 빠르게 그을 때 */
+    const sc = new OfflineAudioContext(1, SR, SR);
+    const scSrc = sc.createBufferSource();
+    scSrc.buffer = noise(sc); scSrc.loop = true;
+    const scF = sc.createBiquadFilter();
+    scF.type = 'bandpass'; scF.frequency.value = SOUND.bandHz * 1.25; scF.Q.value = SOUND.bandQ;
+    const scG = sc.createGain();
+    scG.gain.value = SOUND.volume;                       // s = 1
+    scSrc.connect(scF); scF.connect(scG); scG.connect(sc.destination); scSrc.start();
+
+    /* 톡 — 한 번 */
+    const ky = new OfflineAudioContext(1, Math.floor(SR * 0.4), SR);
+    const kySrc = ky.createBufferSource();
+    kySrc.buffer = noise(ky);
+    const kyF = ky.createBiquadFilter();
+    kyF.type = 'bandpass'; kyF.frequency.value = SOUND.keyHz; kyF.Q.value = SOUND.keyQ;
+    const kyG = ky.createGain();
+    const len = SOUND.keyMs / 1000;
+    kyG.gain.setValueAtTime(0, 0.01);
+    kyG.gain.linearRampToValueAtTime(SOUND.keyVolume, 0.012);
+    kyG.gain.exponentialRampToValueAtTime(0.0001, 0.01 + len);
+    kySrc.connect(kyF); kyF.connect(kyG); kyG.connect(ky.destination);
+    kySrc.start(0.01, 0.3, len + 0.02); kySrc.stop(0.01 + len + 0.02);
+
+    const [a, b] = await Promise.all([sc.startRendering(), ky.startRendering()]);
+    const dB = v => 20 * Math.log10(Math.max(v, 1e-9));
+    return dB(loud(b.getChannelData(0))) - dB(loud(a.getChannelData(0)));
+  });
+  /* 위: 톡이 사각사각보다 크면 적는 내내 시끄럽다.
+     아래: 8 dB 넘게 벌어지면 톡이 사각사각에 묻힌다. */
+  check(`톡이 사각사각에 묻히지 않는다 (${gap.toFixed(1)} dB)`, gap > -8 && gap < 0, true);
+  check('두 소리가 다치지 않는다 (잘림 없음)', await page.evaluate(() =>
+    SOUND.volume * 1 < 1 && SOUND.keyVolume * 0.45 < 1), true);
+}
+
 console.log('\n── 확대 차단 ──');
 check('확대 제스처 preventDefault', await page.evaluate(() =>
   ['gesturestart', 'gesturechange', 'gestureend'].every(t => {
