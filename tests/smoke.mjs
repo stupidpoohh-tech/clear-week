@@ -269,6 +269,21 @@ check('입력창 닫힘', await page.locator('.entry').count(), 0);
 await page.evaluate(() => { App.week.days.sat = []; App.save(); App.render(); });
 await page.waitForTimeout(250);
 
+/* blur만 믿지 않는다 — 딴 데를 누르는 순간(pointerdown)에도 확정한다 */
+{
+  await tapLabel(6);
+  await page.keyboard.type('누르는 순간 저장');
+  const box = await cell(5).boundingBox();
+  await page.mouse.move(box.x + box.width * 0.5, box.y + box.height - 8);
+  await page.mouse.down();            // 아직 떼지 않았는데도 확정돼야 한다
+  await page.waitForTimeout(150);
+  check('딴 데를 누르는 순간 확정된다', await days('sun'), ['누르는 순간 저장']);
+  await page.mouse.up();
+  await page.waitForTimeout(300);
+  await page.evaluate(() => { App.week.days.sun = []; App.week.days.sat = []; App.save(); App.render(); });
+  await page.waitForTimeout(250);
+}
+
 console.log('\n── 편집 · 삭제 ──');
 await cell(3).locator('.item').nth(1).click();
 await page.waitForTimeout(420);
@@ -305,6 +320,53 @@ await strikeFirst('thu');
 check('가로 드래그로 긋기', await page.evaluate(() => App.week.days.thu.filter(i => i.struck).length), 1);
 check('획은 시드+비율로 저장', await page.evaluate(() =>
   Object.keys(App.week.days.thu[0].strikes[0]).sort()), ['a', 'b', 'line', 'seed']);
+
+console.log('\n── 지우개는 어중간한 상태를 남기지 않는다 ──');
+/* 양 끝은 문대는 손이 되돌아가는 자리라 한 번밖에 안 지나간다.
+   그래서 늘 잔흔이 남았다 — 손을 뗄 때 결판을 낸다. */
+{
+  const seedStruck = () => page.evaluate(() => {
+    const now = Date.now();
+    App.week.days.wed = [{ id: 'e1', text: '회의자료 정리하기', struck: true,
+      createdAt: now, updatedAt: now,
+      strikes: [{ line: 0, a: 0.01, b: 0.98, seed: 1074304443 }] }];
+    App.save(); App.render();
+  });
+  const inkState = () => page.evaluate(() => {
+    const it = App.cells.wed.items[0];
+    return { 획: it ? it.strokes.length : 0,
+             남은마스크: it ? it.strokes.filter(s => s.mask).length : 0,
+             저장: App.week.days.wed.map(i => i.strikes.length) };
+  });
+  const rub = async span => {
+    const r = await page.evaluate(() => {
+      const el = App.cells.wed.listEl.querySelector('.item-text');
+      const q = document.createRange(); q.selectNodeContents(el);
+      const b = Array.from(q.getClientRects()).filter(v => v.width > 1)[0];
+      return { x: b.x, y: b.y, w: b.width, h: b.height };
+    });
+    const y = r.y + r.h / 2;
+    const x0 = r.x + r.w * (1 - span) / 2, x1 = r.x + r.w * (1 - (1 - span) / 2);
+    await page.mouse.move(x0, y); await page.mouse.down();
+    for (let n = 0; n < 2; n++) {
+      const [a, b] = n % 2 === 0 ? [x0, x1] : [x1, x0];
+      for (let i = 1; i <= 12; i++) { await page.mouse.move(a + (b - a) * (i / 12), y); await page.waitForTimeout(9); }
+    }
+    await page.mouse.up(); await page.waitForTimeout(400);
+  };
+
+  await seedStruck(); await page.waitForTimeout(400);
+  await rub(1.0);
+  check('전체를 문대면 획이 사라진다', await inkState(), { 획: 0, 남은마스크: 0, 저장: [0] });
+
+  await seedStruck(); await page.waitForTimeout(400);
+  await rub(0.12);
+  check('덜 지웠으면 잉크가 온전히 돌아온다 (잔흔 없음)',
+    await inkState(), { 획: 1, 남은마스크: 0, 저장: [1] });
+
+  await page.evaluate(() => { App.week.days.wed = []; App.save(); App.render(); });
+  await page.waitForTimeout(250);
+}
 
 console.log('\n── 칸이 스스로 나뉜다 ──');
 /* 한 열에 몇 줄이 들어가는지는 화면 높이가 정한다. 그래서 개수를 못 박고 검사하지 않고,
@@ -818,6 +880,28 @@ console.log('\n── 안드로이드(터치) ──');
   check('터치로 빈 곳을 눌러도 열린다', await touch.evaluate(() =>
     !!App.cells.fri.listEl.querySelector('.entry')), true);
   await touch.close();
+}
+
+console.log('\n── 소리 ──');
+check('타자 소리와 깨우기가 있다', await page.evaluate(() =>
+  [typeof Sound.key, typeof Sound.unlock]), ['function', 'function']);
+{
+  await page.evaluate(() => { window.__keys = 0; Sound.key = () => { window.__keys++; }; });
+  await tapLabel(6);
+  await page.keyboard.type('소리');
+  await page.waitForTimeout(200);
+  const n = await page.evaluate(() => window.__keys);
+  check('글자를 넣을 때마다 한 번씩 운다', n > 0 && n <= 6, true);
+  await page.evaluate(() => { window.__keys = 0; });
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowRight');
+  await page.waitForTimeout(150);
+  check('글자가 안 바뀌는 키는 울지 않는다', await page.evaluate(() => window.__keys), 0);
+  await page.keyboard.press('Enter');
+  await page.locator('#weekTitle').click();
+  await page.waitForTimeout(300);
+  await page.evaluate(() => { App.week.days.sun = []; App.save(); App.render(); });
+  await page.waitForTimeout(200);
 }
 
 console.log('\n── 확대 차단 ──');
