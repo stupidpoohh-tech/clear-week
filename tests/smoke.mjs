@@ -96,6 +96,13 @@ check('표본 주가 그려진다', await page.evaluate(() => App.week.days.thu.
   ['낭만백수달', '영상편집']);
 check('표본은 저장하지 않는다', await page.evaluate(() =>
   localStorage.getItem('clearweek:' + App.week.weekId)), null);
+check('셀로판지가 주간 표를 덮는다', await page.evaluate(() => {
+  const s = document.getElementById('guideSheet').getBoundingClientRect();
+  const b = document.getElementById('weekBody').getBoundingClientRect();
+  return s.left <= b.left && s.right >= b.right && s.top <= b.top && s.height > 100;
+}), true);
+check('모서리가 접혀 있다', await page.evaluate(() =>
+  (document.querySelector('#guideSheet .flap').getAttribute('d') || '').length > 10), true);
 await page.mouse.click(195, 120);
 await page.waitForTimeout(200);
 check('아무 데나 누르면 닫힌다', await page.locator('#guide').isVisible(), false);

@@ -223,12 +223,25 @@
      화면을 가리지 않는다. 실제로 쓰이는 자리 옆에 한 마디씩 붙는다. */
   .guide[hidden] { display: none; }     /* 클래스가 [hidden]을 이기지 않게 */
   .guide { position: fixed; inset: 0; z-index: 10; touch-action: none; }
+  /* 종이 위에 덧댄 반투명 한 장. 가장자리가 종이 밖으로 살짝 걸치고
+     오른쪽 아래 모서리가 접혀 있다 — 잡아서 치우면 된다는 표시. */
+  .guide-sheet { position: absolute; pointer-events: none; overflow: visible; }
+  .guide-sheet .film {
+    fill: rgba(29, 43, 80, 0.075);         /* 잉크색을 옅게 — 종이가 비쳐 보인다 */
+    stroke: rgba(29, 43, 80, 0.26); stroke-width: 1;
+  }
+  .guide-sheet .flap {
+    fill: rgba(29, 43, 80, 0.19);          /* 접혀서 두 겹이 된 자리 */
+    stroke: rgba(29, 43, 80, 0.26); stroke-width: 1;
+  }
   .guide-hint {
     position: absolute;
     display: flex; gap: 5px;
     font-size: 10.5px; line-height: 1.45;
     color: var(--ink-faint);
-    background: var(--paper);          /* 표본 글자와 겹쳐도 읽히게 */
+    /* 필름이 덮인 종이색(#fff 위 잉크 7.5%)과 같게 — 설명 자리만 구멍처럼
+       뚫려 보이지 않으면서 표본 글자와 겹쳐도 읽힌다. 필름 농도를 바꾸면 이 값도 같이 바꿀 것 */
+    background: #eeeff2;
     word-break: keep-all;              /* 한글이 낱자로 끊기지 않게 */
     pointer-events: none;
   }
@@ -292,10 +305,14 @@
 <input id="importFile" type="file" accept="application/json,.json" hidden>
 
 <div class="guide" id="guide" hidden>
+  <svg class="guide-sheet" id="guideSheet" aria-hidden="true">
+    <path class="film"></path>
+    <path class="flap"></path>
+  </svg>
   <div id="guideHints"></div>
   <div class="guide-bar">
     <button id="guideNever" type="button">다시 보지 않기</button>
-    <em>예시 화면입니다 · 아무 데나 누르면 닫힘</em>
+    <em>예시입니다 · 아무 데나 누르면 치워집니다</em>
   </div>
 </div>
 
@@ -1309,7 +1326,7 @@ const App = {
       clearTimeout(resizeTimer);
       resizeTimer = setTimeout(() => {
         this.relayoutAll();
-        if (this.guideOn) this.layoutGuideHints();
+        if (this.guideOn) { this.layoutGuideSheet(); this.layoutGuideHints(); }
       }, 120);
     });
   },
@@ -1613,7 +1630,7 @@ const App = {
     this.week = guideSample(this.week.weekId);
     this.render();
     document.getElementById('guide').hidden = false;
-    requestAnimationFrame(() => this.layoutGuideHints());
+    requestAnimationFrame(() => { this.layoutGuideSheet(); this.layoutGuideHints(); });
   },
 
   closeGuide() {
@@ -1632,6 +1649,36 @@ const App = {
     if (at[0] === 'label') return cell.section.querySelector('.cell-label');
     if (at[0] === 'item') return cell.items[at[2]] ? cell.items[at[2]].textEl : null;
     return cell.listEl;
+  },
+
+  /* 셀로판지 한 장 — 주간 표보다 조금 크게 덮어 덧댄 장으로 보이게 하고,
+     오른쪽 아래 모서리를 접어 치울 수 있음을 알린다. */
+  layoutGuideSheet() {
+    const svg = document.getElementById('guideSheet');
+    const body = document.getElementById('weekBody');
+    const bar = document.querySelector('.guide-bar');
+    if (!svg || !body) return;
+
+    const b = body.getBoundingClientRect();
+    const over = 6;      // 종이 밖으로 걸치는 정도 (px)
+    const fold = 24;     // 접힌 모서리 크기 (px)
+    const left = b.left - over;
+    const top = b.top - over;
+    const w = Math.max(60, (b.right + over) - left);
+    const h = Math.max(60, (bar ? bar.getBoundingClientRect().top - 10 : b.bottom) - top);
+
+    svg.style.left = Math.round(left) + 'px';
+    svg.style.top = Math.round(top) + 'px';
+    svg.style.width = Math.round(w) + 'px';
+    svg.style.height = Math.round(h) + 'px';
+    svg.setAttribute('viewBox', '0 0 ' + Math.round(w) + ' ' + Math.round(h));
+
+    const x1 = (w - 0.5).toFixed(1), y1 = (h - 0.5).toFixed(1);
+    const xf = (w - 0.5 - fold).toFixed(1), yf = (h - 0.5 - fold).toFixed(1);
+    svg.querySelector('.film').setAttribute('d',
+      'M0.5,0.5 H' + x1 + ' V' + yf + ' L' + xf + ',' + y1 + ' H0.5 Z');
+    svg.querySelector('.flap').setAttribute('d',
+      'M' + xf + ',' + y1 + ' L' + x1 + ',' + yf + ' L' + x1 + ',' + y1 + ' Z');
   },
 
   /* 설명은 가리키는 것의 오른쪽에 놓고, 요일 열 안에서 끝낸다 */
