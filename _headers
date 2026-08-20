@@ -1,0 +1,15 @@
+# 앱은 파일 하나라서 자주 바뀐다. 브라우저가 예전 것을 붙들고 있으면
+# 고친 것이 반영되지 않는다 — 홈 화면 앱은 특히 잘 그런다.
+# 매번 서버에 물어보게 하되(no-cache), 바뀐 게 없으면 304로 끝나므로 느려지지 않는다.
+/
+  Cache-Control: no-cache
+/index.html
+  Cache-Control: no-cache
+/manifest.webmanifest
+  Cache-Control: no-cache
+
+# 아이콘은 거의 안 바뀐다 — 오래 두고 쓴다
+/icon-180.png
+  Cache-Control: public, max-age=604800
+/icon-512.png
+  Cache-Control: public, max-age=604800

@@ -20,6 +20,13 @@
 > 이미 잠겨 있다면: 저장소에서 `wrangler.toml`을 지우고 푸시 →
 > **배포가 끝나기를 기다린 뒤** 대시보드를 새로고침하면 풀린다.
 
+> ### Production / Preview
+>
+> 바인딩과 변수는 **Production에만 걸려 있어도 동작한다.**
+> `clear-week.pages.dev`가 Production이기 때문이다.
+> Preview는 다른 브랜치를 미리 볼 때 생기는 임시 주소용이라, 지금은 없어도 된다.
+> 대시보드가 환경을 나눠 묻지 않으면 그대로 두면 된다.
+
 ## 1. KV 네임스페이스 만들기 · 묶기
 
 Cloudflare 대시보드 → **Storage & Databases → KV → Create**
@@ -50,7 +57,7 @@ Production과 Preview **양쪽에** 걸어 둔다.
 | 이름 | 값 | 없으면 |
 |---|---|---|
 | `RESEND_API_KEY` | Resend 키 | 코드 메일이 안 나간다 |
-| `MAIL_FROM` | `Clear Week <onboarding@resend.dev>` | 위와 같음 |
+| `MAIL_FROM` | `onboarding@resend.dev` (또는 `Clear Week <onboarding@resend.dev>`) | 위와 같음 |
 | `ALLOWED_EMAILS` | 본인 메일 주소 (쉼표로 여럿) | **서버가 열리지 않는다** |
 
 `ALLOWED_EMAILS`가 비면 일부러 막는다. 없으면 아무 주소로나 코드 메일을 쏠 수 있는
