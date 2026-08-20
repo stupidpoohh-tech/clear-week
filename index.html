@@ -91,17 +91,66 @@
   .note-line.warn { color: var(--ink); font-weight: 600; }
 
   /* 백업 — 제목을 꾹 누르면 열리는 한 줄. 설정 화면은 두지 않는다 */
-  .drawer[hidden] { display: none; }        /* 클래스가 [hidden]을 이기지 않게 */
-  .drawer { flex: none; }
-  .backup[hidden] { display: none; }
+  /* ── 내 계정 — 로그인이 생겼으니 계정을 두는 자리도 생겼다.
+     주간 화면 위에 덮는 한 장. 평소에는 없는 것과 같다. */
+  .account[hidden] { display: none; }
+  .account {
+    position: fixed; inset: 0; z-index: 12;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--paper);
+    padding: 24px;
+    touch-action: none;
+  }
+  .account-card { width: 100%; max-width: 320px; }
+  .account h2 {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.06em;
+    color: var(--ink-faint);
+    padding-bottom: 9px; border-bottom: 1px solid var(--rule);
+  }
+  .account .row {
+    display: flex; align-items: baseline; gap: 10px;
+    padding: 11px 0; border-bottom: 1px solid var(--rule-soft);
+    font-size: 12px; line-height: 1.5; word-break: keep-all;
+  }
+  .account .k { flex: 0 0 52px; color: var(--ink-faint); font-size: 11px; }
+  .account .v { flex: 1 1 auto; min-width: 0; display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .account .v.plain { color: var(--ink-faint); font-size: 11px; overflow-wrap: anywhere; }
+  .account button {
+    border: none; background: none; font: inherit;
+    font-size: 12px; font-weight: 700; color: var(--ink);
+    padding: 0; cursor: pointer; touch-action: none;
+  }
+  .account .msg {
+    padding-top: 9px; font-size: 11px; line-height: 1.55;
+    color: var(--ink-faint); word-break: keep-all; min-height: 1em;
+  }
   .auth-input {
-    flex: 1 1 auto; min-width: 0; max-width: 180px;
+    flex: 1 1 120px; min-width: 0; max-width: 190px;
     border: none; border-bottom: 1px solid var(--rule); background: none;
-    font: inherit; font-size: 11px; color: var(--ink);
-    padding: 2px 0; outline: none;
+    font: inherit; font-size: 12px; color: var(--ink);
+    padding: 1px 0; outline: none;
     -webkit-user-select: text; user-select: text;
   }
-  .auth-input.code { max-width: 76px; letter-spacing: 0.22em; }
+  .auth-input.code { flex: 0 0 84px; letter-spacing: 0.22em; }
+
+  /* 만든 사람 — 계정 화면 맨 아래. 주간 화면에는 두지 않는다 */
+  .made {
+    display: flex; align-items: center; justify-content: center; gap: 7px;
+    padding-top: 20px;
+    font-size: var(--sublabel-font); color: var(--ink-faint);
+  }
+  .made a {
+    display: flex; align-items: center; justify-content: center;
+    width: 19px; height: 19px;
+    border: 1px solid var(--rule); border-radius: 4px;
+    color: var(--ink-faint); text-decoration: none;
+  }
+  .made svg {
+    width: 11px; height: 11px;
+    fill: none; stroke: currentColor; stroke-width: 1.4;
+    stroke-linejoin: round; stroke-linecap: round;
+  }
+  .account-close { padding-top: 18px; text-align: center; }
   .backup {
     flex: none;
     display: flex; align-items: baseline; gap: 12px;
@@ -229,28 +278,6 @@
     pointer-events: none;
   }
 
-  /* ── 푸터 — 표 아래, 종이 밖. 인쇄소 각인처럼 조용히 ─────
-     표는 마지막 칸 아래 선으로 닫히고, 푸터는 그 바깥에 놓인다.
-     플래너의 일부가 아니라 페이지 아래 여백이라는 뜻이다. */
-  footer[hidden] { display: none; }
-  footer {
-    flex: none;
-    display: flex; align-items: center; justify-content: center; gap: 7px;
-    padding-top: 7px;
-    font-size: var(--sublabel-font); color: var(--ink-faint);
-  }
-  footer a {
-    display: flex; align-items: center; justify-content: center;
-    width: 19px; height: 19px;
-    border: 1px solid var(--rule); border-radius: 4px;
-    color: var(--ink-faint); text-decoration: none;
-  }
-  footer svg {
-    width: 11px; height: 11px;
-    fill: none; stroke: currentColor; stroke-width: 1.4;
-    stroke-linejoin: round; stroke-linecap: round;
-  }
-
   /* ── 첫 실행 안내 — 표본 주 위에 설명을 얹는다 ──────────────
      화면을 가리지 않는다. 실제로 쓰이는 자리 옆에 한 마디씩 붙는다. */
   .guide[hidden] { display: none; }     /* 클래스가 [hidden]을 이기지 않게 */
@@ -326,37 +353,55 @@
     </div>
   </header>
   <p class="note-line" id="note" hidden></p>
-  <div class="drawer" id="backup" hidden>
-    <div class="backup">
-      <button id="exportBtn" type="button">내보내기</button>
-      <button id="importBtn" type="button">가져오기</button>
-      <button id="guideBtn" type="button">쓰는 법</button>
-      <button id="footerBtn" type="button">푸터</button>
-      <span class="msg" id="backupMsg"></span>
-    </div>
-    <div class="backup" id="authRow">
-      <button id="loginBtn" type="button">로그인</button>
-      <button id="logoutBtn" type="button" hidden>로그아웃</button>
-      <input id="loginEmail" class="auth-input" type="email" inputmode="email"
-             autocomplete="email" placeholder="메일 주소" hidden>
-      <input id="loginCode" class="auth-input code" type="text" inputmode="numeric"
-             autocomplete="one-time-code" maxlength="6" placeholder="여섯 자리" hidden>
-      <button id="authGo" type="button" hidden>보내기</button>
-      <span class="msg" id="authMsg"></span>
-    </div>
-  </div>
   <div class="week" id="weekBody"></div>
-  <footer id="footer" hidden>
-    <span>만든사람 DADA</span>
-    <a id="homeLink" href="https://dada-portfolio.stupidpoohh.workers.dev/"
-       target="_blank" rel="noopener noreferrer" aria-label="만든 사람 홈">
-      <svg viewBox="0 0 16 16" aria-hidden="true">
-        <path d="M2.6 7.4 8 2.9l5.4 4.5V13a.6.6 0 0 1-.6.6H3.2a.6.6 0 0 1-.6-.6Z"/>
-      </svg>
-    </a>
-  </footer>
 </main>
 <input id="importFile" type="file" accept="application/json,.json" hidden>
+
+<div class="account" id="account" hidden>
+  <div class="account-card">
+    <h2>내 계정</h2>
+
+    <div class="row">
+      <span class="k">동기화</span>
+      <span class="v plain" id="authMsg"></span>
+    </div>
+    <div class="row" id="authRow">
+      <span class="k">계정</span>
+      <span class="v">
+        <button id="loginBtn" type="button">로그인</button>
+        <button id="logoutBtn" type="button" hidden>로그아웃</button>
+        <input id="loginEmail" class="auth-input" type="email" inputmode="email"
+               autocomplete="email" placeholder="메일 주소" hidden>
+        <input id="loginCode" class="auth-input code" type="text" inputmode="numeric"
+               autocomplete="one-time-code" maxlength="6" placeholder="여섯 자리" hidden>
+        <button id="authGo" type="button" hidden>보내기</button>
+      </span>
+    </div>
+    <div class="row">
+      <span class="k">백업</span>
+      <span class="v">
+        <button id="exportBtn" type="button">내보내기</button>
+        <button id="importBtn" type="button">가져오기</button>
+      </span>
+    </div>
+    <div class="row">
+      <span class="k">안내</span>
+      <span class="v"><button id="guideBtn" type="button">쓰는 법 다시 보기</button></span>
+    </div>
+    <p class="msg" id="backupMsg"></p>
+
+    <div class="made">
+      <span>만든사람 DADA</span>
+      <a id="homeLink" href="https://dada-portfolio.stupidpoohh.workers.dev/"
+         target="_blank" rel="noopener noreferrer" aria-label="만든 사람 홈">
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M2.6 7.4 8 2.9l5.4 4.5V13a.6.6 0 0 1-.6.6H3.2a.6.6 0 0 1-.6-.6Z"/>
+        </svg>
+      </a>
+    </div>
+    <div class="account-close"><button id="acctClose" type="button">닫기</button></div>
+  </div>
+</div>
 
 <div class="guide" id="guide" hidden>
   <svg class="guide-sheet" id="guideSheet" aria-hidden="true">
@@ -684,18 +729,6 @@ function saveWeek(week) {
 /* 안내를 다시 안 보기로 했는지. 주 데이터가 아니므로 백업에 담기지 않는다
    (백업은 `clearweek:YYYY-Www` 꼴 키만 모은다). */
 const GUIDE_KEY = STORE_PREFIX + 'guide-seen';
-const FOOTER_KEY = STORE_PREFIX + 'footer-off';
-
-/* 푸터는 기본으로 보인다. 치우면 그 선택을 기억한다 */
-function footerOn() {
-  try { return localStorage.getItem(FOOTER_KEY) !== '1'; } catch (e) { return true; }
-}
-function setFooterOn(on) {
-  try {
-    if (on) localStorage.removeItem(FOOTER_KEY);
-    else localStorage.setItem(FOOTER_KEY, '1');
-  } catch (e) { Store.fail(); }
-}
 
 function guideSeen() {
   try { return localStorage.getItem(GUIDE_KEY) === '1'; }
@@ -707,7 +740,7 @@ function guideSeen() {
 function guideSample(weekId) {
   const w = blankWeek(weekId);
   const mk = (text, struck) => ({
-    id: 'guide-' + (++uidSeq), text, struck: !!struck, createdAt: 0,
+    id: 'guide-' + (++uidSeq), text, struck: !!struck, createdAt: 0, updatedAt: 0,
     strikes: struck ? [{ line: 0, a: 0.01, b: 0.98, seed: 1074304443 }] : [],
   });
   w.days.tue = [mk('장보기')];
@@ -735,7 +768,6 @@ function markGuideSeen() {
   try { localStorage.setItem(GUIDE_KEY, '1'); }
   catch (e) { Store.fail(); }        // 못 적었으면 그 사실을 알린다
 }
-
 /* ── 백업 — 서버가 없으므로 파일 하나가 전부다 ──────────────
    가져오기는 덮어쓰지 않는다. 지금 없는 주만 채운다.
    되돌리기가 없는 앱에서 덮어쓰기는 유일한 사본을 지울 수 있다. */
@@ -1505,7 +1537,6 @@ const App = {
     this.bindBackup();
     this.bindGuide();
     this.bindAuth();
-    this.bindFooter();
     Sync.start();
     /* 화면을 다시 켤 때가 기기를 바꾼 순간이다 — 그때 바로 맞춘다 */
     document.addEventListener('visibilitychange', () => {
@@ -1772,10 +1803,10 @@ const App = {
     cell.mark.textContent = '+' + n;
   },
 
-  /* ── 백업 — 제목을 0.5초 꾹 누르면 한 줄이 열린다 ─────────
-     설정 화면은 두지 않는다. 평소에는 없는 것과 같아야 한다. */
+  /* ── 내 계정 — 제목을 0.5초 꾹 누르면 열린다 ───────────────
+     로그인이 생기면서 계정을 두는 자리가 필요해졌다. 주간 화면에는
+     아무것도 붙이지 않는다 — 만든 사람도 백업도 전부 여기 안에 있다. */
   bindBackup() {
-    const bar = document.getElementById('backup');
     const title = document.getElementById('weekTitle');
     let timer = null;
 
@@ -1813,27 +1844,16 @@ const App = {
       reader.readAsText(f);
     });
 
-    /* 열려 있는 동안 딴 데를 누르면 닫힌다.
-       캡처 단계에서 닫아야 한다 — 항목이 pointerdown에서 자기 위치를 재는데,
-       그 뒤에 줄이 닫히면 화면이 밀려 방금 잰 값이 어긋난다. */
-    this.closeBackupOutside = e => {
-      if (bar.contains(e.target) || e.target === title) return;
-      this.toggleBackup(false);
-    };
+    document.getElementById('acctClose').addEventListener('click', () => this.toggleBackup(false));
   },
 
+  /* 화면을 덮으므로 주간 표의 높이는 그대로다 — 다시 맞출 것이 없다 */
   toggleBackup(force) {
-    const bar = document.getElementById('backup');
-    const open = force === undefined ? bar.hidden : force;
-    if (open === !bar.hidden) return;
-    bar.hidden = !open;
-    this.backupMsg('');
-    const opts = { capture: true };
-    if (open) setTimeout(() => document.addEventListener('pointerdown', this.closeBackupOutside, opts), 0);
-    else document.removeEventListener('pointerdown', this.closeBackupOutside, opts);
-    /* 줄이 하나 늘고 줄면 칸 높이가 바뀐다 — 획을 그 자리에서 다시 맞춘다.
-       다음 프레임으로 미루면 그 사이에 시작된 긋기가 지워진다. */
-    this.relayoutAll();
+    const panel = document.getElementById('account');
+    const open = force === undefined ? panel.hidden : force;
+    if (open === !panel.hidden) return;
+    panel.hidden = !open;
+    if (open) { this.authStep = null; this.backupMsg(''); this.renderAuth(); }
   },
 
   backupMsg(text) { document.getElementById('backupMsg').textContent = text || ''; },
@@ -1927,6 +1947,8 @@ const App = {
     const step = this.authStep;
     /* 서버가 없으면 로그인 버튼을 내보이지 않는다 — 눌러도 안 되는 것을
        내놓지 않는다. 서버 없이도 앱은 완전히 동작한다. */
+    /* 서버가 없으면 계정 줄 자체를 내보이지 않는다 — 라벨만 남아 빈 줄이 되지 않게 */
+    document.getElementById('authRow').hidden = !Sync.ready && !Sync.email;
     el('loginBtn').hidden = !Sync.ready || !!Sync.email || !!step;
     el('logoutBtn').hidden = !Sync.email;
     el('loginEmail').hidden = step !== 'email';
@@ -1940,23 +1962,6 @@ const App = {
 
   /* 표본 주로 바꿔 그린 뒤 그 위에 설명을 얹는다. 닫으면 원래 주로 돌아온다.
      표본은 저장하지 않는다 — save()가 guideOn 동안 아무것도 하지 않는다. */
-  /* ── 푸터 켜고 끄기 — 서랍 안에서. 화면 높이가 바뀌니 다시 맞춘다 ── */
-  bindFooter() {
-    this.showFooter(footerOn());
-    document.getElementById('footerBtn').addEventListener('click', () => {
-      const on = !footerOn();
-      setFooterOn(on);
-      this.showFooter(on);
-      this.backupMsg(on ? '푸터를 다시 켰습니다' : '푸터를 치웠습니다 · 여기서 다시 켤 수 있습니다');
-    });
-  },
-
-  showFooter(on) {
-    document.getElementById('footer').hidden = !on;
-    /* 한 줄이 늘고 줄면 칸 높이가 바뀐다 — 열과 획을 그 자리에서 다시 맞춘다 */
-    if (this.cells) this.relayoutAll();
-  },
-
   openGuide() {
     if (this.guideOn) return;
     this.guideOn = true;

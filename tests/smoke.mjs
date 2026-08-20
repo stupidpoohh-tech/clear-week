@@ -349,12 +349,12 @@ await page.waitForTimeout(400);
 check('항목을 줄이면 표시가 사라짐', await markOf('tue'), null);
 
 console.log('\n── 백업 ──');
-check('평소엔 백업 줄이 닫혀 있음', await page.locator('#backup').isVisible(), false);
+check('평소엔 계정 화면이 닫혀 있다', await page.locator('#account').isVisible(), false);
 const tbox = await page.locator('#weekTitle').boundingBox();
 await page.mouse.move(tbox.x + tbox.width / 2, tbox.y + tbox.height / 2);
 await page.mouse.down(); await page.waitForTimeout(680); await page.mouse.up();
 await page.waitForTimeout(300);
-check('제목 롱프레스로 백업 줄이 열림', await page.locator('#backup').isVisible(), true);
+check('제목 롱프레스로 계정 화면이 열린다', await page.locator('#account').isVisible(), true);
 
 const [download] = await Promise.all([
   page.waitForEvent('download'),
@@ -392,7 +392,7 @@ check('안내 기록은 주 데이터가 아니다', await page.evaluate(() =>
 await page.locator('#guideBtn').click();
 await page.waitForTimeout(250);
 check('백업 줄에서 안내를 다시 열 수 있다', await page.locator('#guide').isVisible(), true);
-check('안내를 열면 백업 줄은 닫힌다', await page.locator('#backup').isVisible(), false);
+check('안내를 열면 계정 화면은 닫힌다', await page.locator('#account').isVisible(), false);
 await page.mouse.click(195, 700);
 await page.waitForTimeout(200);
 
@@ -446,40 +446,25 @@ check('훑어 지워도 남은 것이 맨 위로', await tops('wed'), ['셋@0,0'
 await page.evaluate(() => { App.week.days.wed = []; App.save(); App.render(); });
 await page.waitForTimeout(300);
 
-console.log('\n── 푸터 ──');
-check('푸터가 보인다', await page.locator('#footer').isVisible(), true);
+console.log('\n── 만든 사람은 계정 화면 안에 ──');
+check('주간 화면에는 푸터가 없다', await page.locator('.made').isVisible(), false);
+{
+  const b = await page.locator('#weekTitle').boundingBox();
+  await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+  await page.mouse.down(); await page.waitForTimeout(680); await page.mouse.up();
+  await page.waitForTimeout(250);
+}
+check('계정 화면 안에 있다', await page.locator('.made').isVisible(), true);
 check('홈 링크', await page.locator('#homeLink').getAttribute('href'),
   'https://dada-portfolio.stupidpoohh.workers.dev/');
 check('새 창으로 연다', await page.locator('#homeLink').getAttribute('rel'), 'noopener noreferrer');
-check('푸터는 표 바깥이다', await page.evaluate(() => {
-  const f = document.getElementById('footer').getBoundingClientRect();
+check('계정 화면은 주간 표를 줄이지 않는다', await page.evaluate(() => {
   const w = document.querySelector('.week').getBoundingClientRect();
-  return f.top >= w.bottom - 1;
+  return getComputedStyle(document.getElementById('account')).position === 'fixed' && w.height > 300;
 }), true);
-{
-  const b = await page.locator('#weekTitle').boundingBox();
-  await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
-  await page.mouse.down(); await page.waitForTimeout(680); await page.mouse.up();
-  await page.waitForTimeout(250);
-}
-await page.locator('#footerBtn').click();
+await page.locator('#acctClose').click();
 await page.waitForTimeout(250);
-check('서랍에서 치울 수 있다', await page.locator('#footer').isVisible(), false);
-await page.reload(); await page.waitForTimeout(500);
-check('치운 것을 기억한다', await page.locator('#footer').isVisible(), false);
-{
-  const b = await page.locator('#weekTitle').boundingBox();
-  await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
-  await page.mouse.down(); await page.waitForTimeout(680); await page.mouse.up();
-  await page.waitForTimeout(250);
-}
-await page.locator('#footerBtn').click();
-await page.waitForTimeout(250);
-check('다시 켤 수 있다', await page.locator('#footer').isVisible(), true);
-check('푸터 기록은 주 데이터가 아니다', await page.evaluate(() =>
-  Object.keys(collectWeeks().weeks).some(id => id.indexOf('footer') >= 0)), false);
-await page.mouse.click(195, 400);
-await page.waitForTimeout(200);
+check('닫기로 닫힌다', await page.locator('#account').isVisible(), false);
 
 console.log('\n── 저장 실패 ──');
 /* 사파리 사생활 모드처럼 저장이 막힌 상황 */
@@ -528,7 +513,7 @@ await login(page, 'me@example.com');
 check('로그인하면 주소가 잡힌다', await page.evaluate(() => Sync.email), 'me@example.com');
 
 /* PC에서 적은 것이 서버로 올라간다 */
-await page.mouse.click(195, 740);              // 서랍 닫기
+await page.locator('#acctClose').click();      // 계정 화면 닫기
 await page.waitForTimeout(200);
 await tapLabel(0);
 await type(['PC에서 적음']);
@@ -550,7 +535,7 @@ check('폰에서 로그인하면 받아온다',
   await phone.evaluate(() => App.week.days.mon.map(i => i.text)), ['PC에서 적음']);
 
 /* 양쪽에서 따로 적으면 둘 다 남는다 */
-await phone.mouse.click(195, 740);
+await phone.locator('#acctClose').click();
 await phone.waitForTimeout(200);
 await phone.evaluate(() => {
   const now = Date.now();
@@ -586,7 +571,7 @@ check('로그아웃해도 이 기기 기록은 남는다',
   await page.evaluate(() => App.week.days.mon.map(i => i.text)), ['PC에서 적음']);
 check('로그아웃하면 더 이상 올리지 않는다', await page.evaluate(() => Sync.email), null);
 await phone.close();
-await page.mouse.click(195, 740);
+await page.locator('#acctClose').click();
 await page.waitForTimeout(200);
 
 console.log('\n── 확대 차단 ──');
