@@ -83,6 +83,12 @@
   }
   header h1 { font-size: 15px; font-weight: 700; }
   header .nav { display: flex; align-items: center; gap: 2px; }
+  /* 오늘로 돌아오기. 이번 주를 보고 있을 때는 할 일이 없으므로 나타나지 않는다 */
+  header #today {
+    width: auto; padding: 0 8px;
+    font-size: 10px; font-weight: 700; letter-spacing: 0.06em;
+    color: var(--ink-faint);
+  }
 
   /* 내 계정으로 들어가는 문. 제목 롱프레스는 숨은 지름길로 남겨 두고,
      보이는 입구를 여기 하나 둔다 — 계정은 찾을 수 있어야 한다. */
@@ -363,6 +369,7 @@
   <header>
     <h1 id="weekTitle"></h1>
     <div class="nav">
+      <button id="today" type="button" hidden>today</button>
       <button id="prev" type="button" aria-label="이전 주">‹</button>
       <button id="next" type="button" aria-label="다음 주">›</button>
       <button id="acctBtn" type="button" aria-label="내 계정">
@@ -515,6 +522,12 @@ const SOUND = {
 /* ═══════════════════════════════════════════════════════════════
    2. 유틸
    ═══════════════════════════════════════════════════════════════ */
+/* 손이 항목 위에 닿아 있는 동안은 화면을 다시 그리면 안 된다.
+   동기화가 받은 것을 반영하느라 render()를 돌리면 그리던 획이 통째로 사라진다.
+   지운 직후에 획이 안 그어지던 것이 이것이었다 — 고치고 0.9초 뒤 올린 응답이
+   손이 다시 닿은 순간에 도착했다. */
+const Gesture = { busy: 0 };
+
 const NS = 'http://www.w3.org/2000/svg';
 const TAU = Math.PI * 2;
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -755,6 +768,18 @@ function loadWeek(weekId) {
   }
 }
 
+/* 화면에 보이는 것이 같은지만 본다. 시각(updatedAt)이 달라도 글과 획이 같으면
+   다시 그릴 이유가 없다. */
+function sameWeek(a, b) {
+  if (!a || !b) return false;
+  const shape = w => JSON.stringify(DAY_KEYS.map(k => [
+    (w.days[k] || []).map(it => [it.id, it.text, !!it.struck,
+      (it.strikes || []).map(s => [s.line, s.a, s.b, s.seed])]),
+    w.notes ? (w.notes[k] || '') : '',
+  ]));
+  return shape(a) === shape(b);
+}
+
 function saveWeek(week) {
   try {
     localStorage.setItem(STORE_PREFIX + week.weekId, JSON.stringify(week));
@@ -800,7 +825,7 @@ function guideSample(weekId) {
 /* at: [무엇, 어느 칸, 몇 번째 항목] */
 const GUIDE_HINTS = [
   { at: ['label', 'mon'], ring: true,
-    verb: '날짜를 누른다', tail: '그 줄에 바로 적힙니다. ＋ 버튼은 없습니다' },
+    verb: '빈 곳을 누른다', tail: '그 칸에 바로 적힙니다. 날짜를 눌러도 됩니다' },
   { at: ['item', 'tue', 0],
     verb: '글자 위를 옆으로 긋는다', tail: '다 한 일에 취소선' },
   { at: ['item', 'wed', 0],
@@ -1203,6 +1228,7 @@ class StrikeItem {
     Sound.init();
     Sound.resume();
     this.el.setPointerCapture(e.pointerId);
+    Gesture.busy++;
     this.pointer = {
       id: e.pointerId,
       rowRect: this.el.getBoundingClientRect(),
@@ -1284,6 +1310,7 @@ class StrikeItem {
     const p = this.pointer;
     if (!p || e.pointerId !== p.id) return;
     if (p.longPress) clearTimeout(p.longPress);
+    Gesture.busy = Math.max(0, Gesture.busy - 1);
     this.pointer = null;
     Sound.silence();
 
@@ -1317,6 +1344,7 @@ class StrikeItem {
     const p = this.pointer;
     if (!p) return;
     if (p.longPress) clearTimeout(p.longPress);
+    Gesture.busy = Math.max(0, Gesture.busy - 1);
     this.pointer = null;
     Sound.silence();
     if (p.mode === 'purge') {
@@ -1596,6 +1624,7 @@ const App = {
     Store.probe();                                 // 적기 전에 미리 알아낸다
     this.thisMonday = mondayOf(new Date());
     this.go(this.thisMonday);
+    document.getElementById('today').addEventListener('click', () => this.go(this.thisMonday));
     document.getElementById('prev').addEventListener('click', () => this.shift(-7));
     document.getElementById('next').addEventListener('click', () => this.shift(7));
     this.bindBackup();
@@ -1662,10 +1691,15 @@ const App = {
 
   adopt(week) {
     if (this.guideOn || !week || week.weekId !== this.week.weekId) return;
-    /* 적는 중이면 아무것도 하지 않는다. 저장만 하고 화면을 그대로 두면
-       메모리의 주가 저장본과 어긋나고, 다음 저장 때 방금 받은 것을 덮어쓴다.
-       입력이 끝나는 순간 다시 맞춘다. */
-    if (document.querySelector('.entry, .sublabel-entry')) return;
+    /* 적는 중이거나 손이 닿아 있으면 아무것도 하지 않는다. 저장만 하고 화면을
+       그대로 두면 메모리의 주가 저장본과 어긋나고, 다음 저장 때 방금 받은 것을
+       덮어쓴다. 손을 떼거나 입력이 끝나는 순간 다시 맞춘다. */
+    if (Gesture.busy || document.querySelector('.entry, .sublabel-entry')) return;
+
+    /* 대개는 방금 내가 올린 것이 그대로 돌아온다 — 그때는 다시 그릴 것이 없다.
+       매번 그리면 그리던 획이 지워지고 화면이 깜빡인다. */
+    if (sameWeek(week, this.week)) { saveWeek(week); return; }
+
     saveWeek(week);
     this.week = loadWeek(week.weekId);
     this.render();
@@ -1730,6 +1764,8 @@ const App = {
 
   render() {
     document.getElementById('weekTitle').textContent = weekTitle(this.monday);
+    document.getElementById('today').hidden =
+      this.monday.getTime() === this.thisMonday.getTime();
     this.updateNote();
 
     const body = document.getElementById('weekBody');
@@ -1777,7 +1813,7 @@ const App = {
 
     {
       /* 살짝 누르면 항목 추가, 꾹 눌러 아래로 끌면 요일 아래 메모 */
-      let g = null;
+      let g = null, skipClick = false;
       label.addEventListener('pointerdown', e => {
         label.setPointerCapture(e.pointerId);
         g = { id: e.pointerId, x: e.clientX, y: e.clientY, pulled: false };
@@ -1791,16 +1827,45 @@ const App = {
           this.openSublabel(key, gutter, sub);
         }
       });
+      /* 입력창은 pointerup이 아니라 click에서 연다.
+         터치에서는 브라우저가 click 시점에 버튼에 포커스를 주는데, pointerup에서
+         열면 방금 focus()한 입력창이 그 click에 포커스를 빼앗겨 곧바로 닫힌다.
+         (데스크톱은 mousedown에서 포커스가 가므로 이 순서 문제가 드러나지 않았다.) */
       label.addEventListener('pointerup', e => {
-        if (!g || e.pointerId !== g.id) return;
+        if (!g || e.pointerId !== g.id) { skipClick = true; return; }
         const moved = Math.hypot(e.clientX - g.x, e.clientY - g.y);
-        const pulled = g.pulled;
+        skipClick = g.pulled || moved >= 10;
         g = null;
-        if (!pulled && moved < 10) this.openEntry(key, listEl);
       });
-      label.addEventListener('pointercancel', () => { g = null; });
+      label.addEventListener('pointercancel', () => { g = null; skipClick = true; });
+      label.addEventListener('click', () => {
+        if (skipClick) { skipClick = false; return; }
+        this.openEntry(key, listEl);
+      });
 
       sub.addEventListener('click', () => this.openSublabel(key, gutter, sub));
+
+      /* 칸의 빈 곳을 눌러도 그 칸에 적힌다. 라벨만 누르게 하면 과녁이 너무 작다.
+         항목·라벨·입력창 위는 각자의 제스처가 있으므로 건드리지 않고,
+         움직였으면(긋기·훑어 지우기) 열지 않는다. */
+      let spot = null, openOnClick = false;
+      const plain = e => !e.target.closest('.item, .cell-gutter, .entry, .sublabel-entry');
+      section.addEventListener('pointerdown', e => {
+        spot = plain(e) ? { x: e.clientX, y: e.clientY } : null;
+        openOnClick = false;
+      });
+      section.addEventListener('pointerup', e => {
+        const from = spot;
+        spot = null;
+        openOnClick = !!from && plain(e) &&
+          Math.hypot(e.clientX - from.x, e.clientY - from.y) < 10;
+      });
+      section.addEventListener('pointercancel', () => { spot = null; openOnClick = false; });
+      section.addEventListener('click', () => {
+        if (!openOnClick) return;
+        openOnClick = false;
+        this.openEntry(key, listEl);
+      });
     }
 
     const items = this.week.days[key].map(data => {

@@ -216,6 +216,20 @@ check('외곽선은 아래만', await page.evaluate(() => {
   return [w.borderTopWidth, w.borderLeftWidth, w.borderRightWidth, w.borderBottomWidth];
 }), ['0px', '0px', '0px', '1px']);
 
+console.log('\n── 오늘로 돌아오기 ──');
+check('이번 주에는 나타나지 않는다', await page.locator('#today').isVisible(), false);
+await page.locator('#prev').click();
+await page.locator('#prev').click();
+await page.waitForTimeout(300);
+check('넘기면 나타난다', await page.locator('#today').isVisible(), true);
+const away = await page.locator('#weekTitle').textContent();
+await page.locator('#today').click();
+await page.waitForTimeout(300);
+check('누르면 이번 주로 돌아온다', await page.evaluate(() =>
+  App.monday.getTime() === App.thisMonday.getTime()), true);
+check('돌아오면 다시 사라진다', await page.locator('#today').isVisible(), false);
+check('넘겼던 주와 다른 주다', (await page.locator('#weekTitle').textContent()) !== away, true);
+
 console.log('\n── 적기 ──');
 await tapLabel(3);
 await type(['멜팅의원', '웨비나']);
@@ -226,6 +240,34 @@ await page.locator('#weekTitle').click();          // 엔터 없이 딴 데 누�
 await page.waitForTimeout(300);
 check('엔터 없이 딴 데 눌러도 저장', await days('thu'), ['멜팅의원', '웨비나', '낭만백수달']);
 check('입력창 닫힘', await page.locator('.entry').count(), 0);
+
+/* 라벨만 과녁이면 너무 작다 — 칸의 빈 곳을 눌러도 그 칸에 적힌다 */
+{
+  const box = await cell(5).boundingBox();
+  await page.mouse.click(box.x + box.width * 0.6, box.y + box.height - 8);
+  await page.waitForTimeout(250);
+  check('빈 곳을 눌러도 입력창이 열린다', await page.evaluate(() =>
+    !!App.cells.sat.listEl.querySelector('.entry')), true);
+  await page.keyboard.type('빈 곳에서 적음');
+  await page.keyboard.press('Enter');
+  await page.locator('#weekTitle').click();
+  await page.waitForTimeout(300);
+  check('빈 곳 탭으로 그 칸에 적힌다', await days('sat'), ['빈 곳에서 적음']);
+}
+{
+  const it = await cell(5).locator('.item').first().boundingBox();
+  await page.mouse.click(it.x + 10, it.y + it.height / 2);
+  await page.waitForTimeout(450);
+  check('항목 위를 누른 것은 편집이지 새 항목이 아니다',
+    await page.evaluate(() => (App.cells.sat.listEl.querySelector('.entry') || {}).value),
+    '빈 곳에서 적음');
+  await page.keyboard.press('Escape');
+  await page.locator('#weekTitle').click();
+  await page.waitForTimeout(300);
+  check('항목 수는 그대로', await days('sat'), ['빈 곳에서 적음']);
+}
+await page.evaluate(() => { App.week.days.sat = []; App.save(); App.render(); });
+await page.waitForTimeout(250);
 
 console.log('\n── 편집 · 삭제 ──');
 await cell(3).locator('.item').nth(1).click();
@@ -712,6 +754,71 @@ check('비운 뒤에도 서버가 다시 차지 않는다', Object.keys(api.week
 await devA.close();
 await devB.close();
 api.resetAt = 0;
+
+console.log('\n── 손이 닿아 있는 동안은 다시 그리지 않는다 ──');
+/* 고치고 0.9초 뒤 올린 응답이 도착해 render()가 돌면 그리던 획이 통째로 사라진다.
+   "지운 직후에는 선이 잘 안 그어진다"가 이것이었다. */
+{
+  await page.evaluate(() => {
+    window.__renders = 0;
+    const r = App.render.bind(App);
+    App.render = function () { window.__renders++; return r(); };
+    const now = Date.now();
+    App.week.days.sun = ['회의자료 정리하기', '지울 것'].map((text, i) =>
+      ({ id: 'g' + i, text, struck: false, createdAt: now + i, updatedAt: now + i, strikes: [] }));
+    App.save(); App.render();
+  });
+  await page.waitForTimeout(1500);
+  await page.evaluate(() => { App.removeItem(App.cells.sun.items[1], 'sun'); window.__renders = 0; });
+  await page.waitForTimeout(750);        // 올리기까지 0.9초 — 응답이 긋는 도중에 온다
+  const r = await page.evaluate(() => {
+    const el = App.cells.sun.listEl.querySelector('.item-text');
+    const q = document.createRange(); q.selectNodeContents(el);
+    const x = Array.from(q.getClientRects()).filter(v => v.width > 1)[0];
+    return { x: x.x, y: x.y, w: x.width, h: x.height };
+  });
+  const y = r.y + r.h / 2;
+  await page.mouse.move(r.x + 1, y); await page.mouse.down();
+  for (let i = 1; i <= 16; i++) { await page.mouse.move(r.x + 1 + r.w * 0.95 * (i / 16), y); await page.waitForTimeout(14); }
+  await page.mouse.up(); await page.waitForTimeout(500);
+  check('긋는 동안에는 다시 그리지 않는다', await page.evaluate(() => window.__renders), 0);
+  check('지운 직후에도 획이 남는다', await page.evaluate(() =>
+    App.week.days.sun.filter(i => i.struck).map(i => i.text)), ['회의자료 정리하기']);
+  await page.evaluate(() => { App.week.days.sun = []; App.save(); App.render(); });
+  await page.waitForTimeout(250);
+}
+
+console.log('\n── 안드로이드(터치) ──');
+/* 터치에서는 브라우저가 click 시점에 버튼에 포커스를 준다. 입력창을 pointerup에서
+   열면 그 click에 포커스를 빼앗겨 곧바로 닫힌다 — 갤럭시에서 생성이 안 되던 이유다. */
+{
+  const touch = await (await browser.newContext({
+    viewport: { width: 393, height: 727 }, hasTouch: true, isMobile: true,
+    deviceScaleFactor: 2, userAgent: 'Mozilla/5.0 (Linux; Android 13; Pixel 5) ' +
+      'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Mobile Safari/537.36',
+  })).newPage();
+  await touch.goto(`http://127.0.0.1:${PORT}/index.html`);
+  await touch.evaluate(() => { markGuideSeen(); });
+  await touch.reload(); await touch.waitForTimeout(600);
+
+  const lb = await touch.locator('.days .cell').nth(0).locator('.cell-label').boundingBox();
+  await touch.touchscreen.tap(lb.x + lb.width / 2, lb.y + lb.height / 2);
+  await touch.waitForTimeout(350);
+  check('터치로 라벨을 눌러도 입력창이 열린다', await touch.locator('.entry').count(), 1);
+  check('입력창이 포커스를 지킨다', await touch.evaluate(() =>
+    document.activeElement && document.activeElement.className), 'entry');
+  await touch.keyboard.type('터치로 적음');
+  await touch.keyboard.press('Enter');
+  await touch.waitForTimeout(300);
+  check('터치로 적힌다', await touch.evaluate(() => App.week.days.mon.map(i => i.text)), ['터치로 적음']);
+
+  const box = await touch.locator('.days .cell').nth(4).boundingBox();
+  await touch.touchscreen.tap(box.x + box.width * 0.6, box.y + box.height - 8);
+  await touch.waitForTimeout(350);
+  check('터치로 빈 곳을 눌러도 열린다', await touch.evaluate(() =>
+    !!App.cells.fri.listEl.querySelector('.entry')), true);
+  await touch.close();
+}
 
 console.log('\n── 확대 차단 ──');
 check('확대 제스처 preventDefault', await page.evaluate(() =>
