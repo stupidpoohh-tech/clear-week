@@ -219,6 +219,46 @@
     pointer-events: none;
   }
 
+  /* ── 첫 실행 안내 — 한 장만. 종이에 끼워 둔 안내 쪽지 ────── */
+  .guide[hidden] { display: none; }     /* 클래스가 [hidden]을 이기지 않게 */
+  .guide {
+    position: fixed; inset: 0; z-index: 10;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(255, 255, 255, 0.94);   /* 아래 종이가 비쳐 보인다 */
+    padding: 24px;
+    touch-action: none;
+  }
+  .guide-card { width: 100%; max-width: 300px; }
+  .guide h2 {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.06em;
+    color: var(--ink-faint);
+    padding-bottom: 9px; border-bottom: 1px solid var(--rule);
+  }
+  .guide ul { list-style: none; }
+  .guide li {
+    display: flex; align-items: baseline; gap: 11px;
+    padding: 10px 0; border-bottom: 1px solid var(--rule-soft);
+    font-size: 12px; line-height: 1.5;
+    word-break: keep-all;      /* 한글이 낱자 단위로 끊기지 않게 */
+  }
+  .guide li svg { flex: none; width: 26px; height: 11px; }
+  .guide li b { font-weight: 700; }
+  .guide li span { color: var(--ink-faint); }
+  .guide-note {
+    padding-top: 11px; font-size: 11px; line-height: 1.6;
+    color: var(--ink-faint); word-break: keep-all;
+  }
+  .guide-actions {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+    padding-top: 16px;
+  }
+  .guide-actions button {
+    border: none; background: none; font: inherit;
+    font-size: 12px; font-weight: 700; color: var(--ink);
+    padding: 6px 0; cursor: pointer; touch-action: none;
+  }
+  .guide-actions em { font-style: normal; font-size: 10px; color: var(--ink-faint); }
+
   /* ── 입력 ────────────────────────────────────────────────── */
   .entry {
     width: 100%;
@@ -245,11 +285,53 @@
   <div class="backup" id="backup" hidden>
     <button id="exportBtn" type="button">내보내기</button>
     <button id="importBtn" type="button">가져오기</button>
+    <button id="guideBtn" type="button">쓰는 법</button>
     <span class="msg" id="backupMsg"></span>
   </div>
   <div class="week" id="weekBody"></div>
 </main>
 <input id="importFile" type="file" accept="application/json,.json" hidden>
+
+<div class="guide" id="guide" hidden>
+  <div class="guide-card">
+    <h2>쓰는 법</h2>
+    <ul>
+      <li>
+        <svg viewBox="0 0 26 11" fill="none" stroke="#9a9eab" stroke-width="1.2" aria-hidden="true">
+          <circle cx="13" cy="5.5" r="2.6" fill="#9a9eab" stroke="none"/>
+        </svg>
+        <div><b>날짜를 누른다</b> — <span>그 줄에 바로 적힙니다. ＋ 버튼은 없습니다</span></div>
+      </li>
+      <li>
+        <svg viewBox="0 0 26 11" fill="none" stroke="#9a9eab" stroke-width="1.2" stroke-linecap="round" aria-hidden="true">
+          <path d="M2 5.5H22M18.5 2.5L22 5.5L18.5 8.5"/>
+        </svg>
+        <div><b>글자 위를 긋는다</b> — <span>다 한 일에 취소선. 그은 것은 사라지지 않고 그 자리에 남습니다</span></div>
+      </li>
+      <li>
+        <svg viewBox="0 0 26 11" fill="none" stroke="#9a9eab" stroke-width="1.2" stroke-linecap="round" aria-hidden="true">
+          <path d="M4 5.5H22M7.5 2.5L4 5.5L7.5 8.5M18.5 2.5L22 5.5L18.5 8.5"/>
+        </svg>
+        <div><b>그은 자리를 문댄다</b> — <span>잘못 그었으면 문질러 벗겨냅니다</span></div>
+      </li>
+      <li>
+        <svg viewBox="0 0 26 11" fill="none" stroke="#9a9eab" stroke-width="1.2" aria-hidden="true">
+          <circle cx="13" cy="5.5" r="2.2" fill="#9a9eab" stroke="none"/>
+          <circle cx="13" cy="5.5" r="4.8"/>
+        </svg>
+        <div><b>꾹 누른다</b> — <span>0.5초. 그 항목이 지워집니다</span></div>
+      </li>
+    </ul>
+    <p class="guide-note">
+      칸은 적은 만큼 저절로 나뉩니다. 지난 주는 열람만 됩니다.<br>
+      못 한 일은 다음 주로 넘어가지 않습니다.
+    </p>
+    <div class="guide-actions">
+      <button id="guideNever" type="button">다시 보지 않기</button>
+      <em>아무 데나 누르면 닫힘</em>
+    </div>
+  </div>
+</div>
 
 <script>
 'use strict';
@@ -555,6 +637,20 @@ function saveWeek(week) {
     Store.fail();     // 화면은 그대로 동작하되, 저장이 안 된다는 것은 알린다
     return false;
   }
+}
+
+/* 안내를 다시 안 보기로 했는지. 주 데이터가 아니므로 백업에 담기지 않는다
+   (백업은 `clearweek:YYYY-Www` 꼴 키만 모은다). */
+const GUIDE_KEY = STORE_PREFIX + 'guide-seen';
+
+function guideSeen() {
+  try { return localStorage.getItem(GUIDE_KEY) === '1'; }
+  catch (e) { return false; }        // 저장이 막혔으면 매번 보여 준다
+}
+
+function markGuideSeen() {
+  try { localStorage.setItem(GUIDE_KEY, '1'); }
+  catch (e) { Store.fail(); }        // 못 적었으면 그 사실을 알린다
 }
 
 /* ── 백업 — 서버가 없으므로 파일 하나가 전부다 ──────────────
@@ -1216,6 +1312,8 @@ const App = {
     document.getElementById('prev').addEventListener('click', () => this.shift(-7));
     document.getElementById('next').addEventListener('click', () => this.shift(7));
     this.bindBackup();
+    this.bindGuide();
+    if (!guideSeen()) this.openGuide();
 
     /* 화면 크기가 바뀌면 열 경계와 획을 다시 맞춘다 */
     let resizeTimer = null;
@@ -1487,6 +1585,27 @@ const App = {
   },
 
   backupMsg(text) { document.getElementById('backupMsg').textContent = text || ''; },
+
+  /* ── 첫 실행 안내 — 버튼이 하나도 없는 화면이라 첫 단서는 필요하다 ──
+     아무 데나 누르면 이번만 닫히고, 다시 보지 않기를 누르면 영영 안 뜬다. */
+  bindGuide() {
+    const g = document.getElementById('guide');
+    g.addEventListener('pointerdown', e => {
+      if (e.target.closest('#guideNever')) return;   // 버튼은 자기 일을 하게 둔다
+      this.closeGuide();
+    });
+    document.getElementById('guideNever').addEventListener('click', () => {
+      markGuideSeen();
+      this.closeGuide();
+    });
+    document.getElementById('guideBtn').addEventListener('click', () => {
+      this.toggleBackup(false);
+      this.openGuide();
+    });
+  },
+
+  openGuide() { document.getElementById('guide').hidden = false; },
+  closeGuide() { document.getElementById('guide').hidden = true; },
 
   /* ── 적기: 인라인 입력, 엔터로 연속 입력 ─────────────────── */
   openEntry(dayKey, listEl) {

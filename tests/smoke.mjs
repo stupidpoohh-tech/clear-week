@@ -74,6 +74,21 @@ async function strikeFirst(key) {
   for (let i = 1; i <= 14; i++) { await page.mouse.move(r.x + 1 + r.w * 0.95 * (i / 14), y); await page.waitForTimeout(8); }
   await page.mouse.up(); await page.waitForTimeout(400);
 }
+console.log('\n── 첫 실행 안내 ──');
+/* 버튼이 하나도 없는 화면이라 첫 단서가 필요하다. 단, 한 번 거절하면 다시 안 뜬다 */
+check('첫 실행에 안내가 뜬다', await page.locator('#guide').isVisible(), true);
+check('핵심 4개만 담는다', await page.locator('#guide li').count(), 4);
+await page.mouse.click(195, 120);
+await page.waitForTimeout(200);
+check('아무 데나 누르면 닫힌다', await page.locator('#guide').isVisible(), false);
+await page.reload(); await page.waitForTimeout(400);
+check('닫기만 했으면 다음에 다시 뜬다', await page.locator('#guide').isVisible(), true);
+await page.locator('#guideNever').click();
+await page.waitForTimeout(200);
+check('다시 보지 않기 — 그 자리에서 닫힘', await page.locator('#guide').isVisible(), false);
+await page.reload(); await page.waitForTimeout(400);
+check('다시 보지 않기 — 새로고침해도 안 뜸', await page.locator('#guide').isVisible(), false);
+
 console.log('\n── 화면 ──');
 check('8칸(요일 7 + note)', await page.locator('.cell').count(), 8);
 check('페이지 스크롤 없음', await page.evaluate(() =>
@@ -253,6 +268,14 @@ check('이미 있는 주는 그대로 둠', brought.untouched, true);
 check('가져온 주가 실제로 생김', brought.filled, true);
 check('백업 파일이 아니면 거절', await page.evaluate(() => importBackup('{"a":1}').error), 'Clear Week 백업 파일이 아님');
 check('깨진 파일은 거절', await page.evaluate(() => importBackup('nope').error), '읽을 수 없는 파일');
+check('안내 기록은 주 데이터가 아니다', await page.evaluate(() =>
+  Object.keys(collectWeeks().weeks).some(id => id.indexOf('guide') >= 0)), false);
+await page.locator('#guideBtn').click();
+await page.waitForTimeout(250);
+check('백업 줄에서 안내를 다시 열 수 있다', await page.locator('#guide').isVisible(), true);
+check('안내를 열면 백업 줄은 닫힌다', await page.locator('#backup').isVisible(), false);
+await page.mouse.click(195, 700);
+await page.waitForTimeout(200);
 
 console.log('\n── 저장 실패 ──');
 /* 사파리 사생활 모드처럼 저장이 막힌 상황 */
