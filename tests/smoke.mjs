@@ -396,6 +396,91 @@ check('안내를 열면 백업 줄은 닫힌다', await page.locator('#backup').
 await page.mouse.click(195, 700);
 await page.waitForTimeout(200);
 
+console.log('\n── 삭제하면 아래가 위로 올라온다 ──');
+/* 지운 자리가 비어 있으면 안 된다. 지운 경로가 여럿이라 전부 확인한다 */
+const tops = key => page.evaluate(k => {
+  const box = App.cells[k].listEl.getBoundingClientRect();
+  return Array.from(App.cells[k].listEl.querySelectorAll('.item')).map(el => {
+    const r = el.getBoundingClientRect();
+    return el.textContent + '@' + Math.round(r.top - box.top) + ',' + Math.round(r.left - box.left);
+  });
+}, key);
+const seedCell = (key, texts) => page.evaluate(([k, list]) => {
+  const now = Date.now();
+  App.week.days[k] = list.map((text, i) =>
+    ({ id: k + i, text, struck: false, createdAt: now + i, updatedAt: now + i, strikes: [] }));
+  App.save(); App.render();
+}, [key, texts]);
+
+await seedCell('wed', ['하나', '둘', '셋']);
+await page.waitForTimeout(400);
+await page.evaluate(() => App.removeItem(App.cells.wed.items[1], 'wed'));
+await page.waitForTimeout(300);
+check('가운데를 지우면 아래가 올라온다', await tops('wed'), ['하나@0,0', '셋@26,0']);
+
+await seedCell('wed', ['하나', '둘', '셋']);
+await page.waitForTimeout(400);
+await page.evaluate(() => {
+  const it = App.cells.wed.items[0];
+  it.data.struck = true;
+  it.data.strikes = [{ line: 0, a: 0.02, b: 0.97, seed: 12345 }];
+  it.clearStrokes(); it.restore();
+});
+await page.waitForTimeout(250);
+await page.evaluate(() => App.removeItem(App.cells.wed.items[0], 'wed'));
+await page.waitForTimeout(300);
+check('그어진 것을 지워도 올라온다', await tops('wed'), ['둘@0,0', '셋@26,0']);
+check('지운 항목의 획도 같이 사라진다', await page.evaluate(() =>
+  App.cells.wed.listEl.querySelectorAll('svg path').length), 0);
+
+await seedCell('wed', ['하나', '둘', '셋', '넷']);
+await page.waitForTimeout(400);
+{
+  const b = await cell(2).locator('.item').nth(0).boundingBox();
+  await page.mouse.move(b.x + 30, b.y + b.height / 2);
+  await page.mouse.down(); await page.waitForTimeout(700);
+  await page.mouse.move(b.x + 30, b.y + b.height * 1.5, { steps: 5 });
+  await page.waitForTimeout(150); await page.mouse.up(); await page.waitForTimeout(400);
+}
+check('훑어 지워도 남은 것이 맨 위로', await tops('wed'), ['셋@0,0', '넷@26,0']);
+await page.evaluate(() => { App.week.days.wed = []; App.save(); App.render(); });
+await page.waitForTimeout(300);
+
+console.log('\n── 푸터 ──');
+check('푸터가 보인다', await page.locator('#footer').isVisible(), true);
+check('홈 링크', await page.locator('#homeLink').getAttribute('href'),
+  'https://dada-portfolio.stupidpoohh.workers.dev/');
+check('새 창으로 연다', await page.locator('#homeLink').getAttribute('rel'), 'noopener noreferrer');
+check('푸터는 표 바깥이다', await page.evaluate(() => {
+  const f = document.getElementById('footer').getBoundingClientRect();
+  const w = document.querySelector('.week').getBoundingClientRect();
+  return f.top >= w.bottom - 1;
+}), true);
+{
+  const b = await page.locator('#weekTitle').boundingBox();
+  await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+  await page.mouse.down(); await page.waitForTimeout(680); await page.mouse.up();
+  await page.waitForTimeout(250);
+}
+await page.locator('#footerBtn').click();
+await page.waitForTimeout(250);
+check('서랍에서 치울 수 있다', await page.locator('#footer').isVisible(), false);
+await page.reload(); await page.waitForTimeout(500);
+check('치운 것을 기억한다', await page.locator('#footer').isVisible(), false);
+{
+  const b = await page.locator('#weekTitle').boundingBox();
+  await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+  await page.mouse.down(); await page.waitForTimeout(680); await page.mouse.up();
+  await page.waitForTimeout(250);
+}
+await page.locator('#footerBtn').click();
+await page.waitForTimeout(250);
+check('다시 켤 수 있다', await page.locator('#footer').isVisible(), true);
+check('푸터 기록은 주 데이터가 아니다', await page.evaluate(() =>
+  Object.keys(collectWeeks().weeks).some(id => id.indexOf('footer') >= 0)), false);
+await page.mouse.click(195, 400);
+await page.waitForTimeout(200);
+
 console.log('\n── 저장 실패 ──');
 /* 사파리 사생활 모드처럼 저장이 막힌 상황 */
 await page.evaluate(() => {
@@ -408,6 +493,14 @@ check('저장이 막히면 알린다', await page.locator('#note').isVisible(), 
 check('알림 문구', /^저장 안 됨/.test(await page.locator('#note').textContent()), true);
 
 console.log('\n── 로그인 · 동기화 ──');
+check('서버가 없으면 로그인 버튼을 내보이지 않는다', await page.evaluate(() => {
+  const was = Sync.ready;
+  Sync.ready = false; App.renderAuth();
+  const hidden = document.getElementById('loginBtn').hidden;
+  const msg = document.getElementById('authMsg').textContent;
+  Sync.ready = was; App.renderAuth();
+  return { hidden, msg };
+}), { hidden: true, msg: '이 기기에만 저장됩니다' });
 /* 로그아웃 상태의 앱은 예전과 완전히 같아야 한다 */
 await page.evaluate(() => { Storage.prototype.setItem = origSetItem; });
 await page.reload(); await page.waitForTimeout(500);
