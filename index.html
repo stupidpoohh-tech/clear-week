@@ -78,7 +78,21 @@
     border-bottom: 1px solid var(--rule);
   }
   header h1 { font-size: 15px; font-weight: 700; }
-  header .nav { display: flex; gap: 2px; }
+  header .nav { display: flex; align-items: center; gap: 2px; }
+
+  /* 내 계정으로 들어가는 문. 제목 롱프레스는 숨은 지름길로 남겨 두고,
+     보이는 입구를 여기 하나 둔다 — 계정은 찾을 수 있어야 한다. */
+  header #acctBtn {
+    width: 32px; margin-left: 8px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  header #acctBtn svg {
+    width: 17px; height: 17px;
+    fill: none; stroke: var(--ink-faint); stroke-width: 1.5;
+    stroke-linecap: round;
+  }
+  /* 로그인돼 있으면 진해진다 — 열어 보지 않아도 맞춰지는 중인지 알 수 있게 */
+  header #acctBtn.on svg { stroke: var(--ink); }
   header button {
     border: none; background: none; font: inherit;
     font-size: 20px; line-height: 1; color: var(--ink);
@@ -350,6 +364,12 @@
     <div class="nav">
       <button id="prev" type="button" aria-label="이전 주">‹</button>
       <button id="next" type="button" aria-label="다음 주">›</button>
+      <button id="acctBtn" type="button" aria-label="내 계정">
+        <svg viewBox="0 0 20 20" aria-hidden="true">
+          <circle cx="10" cy="6.7" r="3.1"/>
+          <path d="M4.1 16.6a5.9 5.9 0 0 1 11.8 0"/>
+        </svg>
+      </button>
     </div>
   </header>
   <p class="note-line" id="note" hidden></p>
@@ -1845,6 +1865,7 @@ const App = {
     });
 
     document.getElementById('acctClose').addEventListener('click', () => this.toggleBackup(false));
+    document.getElementById('acctBtn').addEventListener('click', () => this.toggleBackup());
   },
 
   /* 화면을 덮으므로 주간 표의 높이는 그대로다 — 다시 맞출 것이 없다 */
@@ -1955,6 +1976,8 @@ const App = {
     el('loginCode').hidden = step !== 'code';
     el('authGo').hidden = !step;
     el('authGo').textContent = step === 'code' ? '확인' : '코드 받기';
+    /* 머리말의 사람 표시도 같이 바뀐다 */
+    document.getElementById('acctBtn').classList.toggle('on', !!Sync.email);
     el('authMsg').textContent = msg || (Sync.email
       ? Sync.email + ' · 자동으로 맞춰집니다'
       : '이 기기에만 저장됩니다');

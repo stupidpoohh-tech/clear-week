@@ -350,6 +350,19 @@ check('항목을 줄이면 표시가 사라짐', await markOf('tue'), null);
 
 console.log('\n── 백업 ──');
 check('평소엔 계정 화면이 닫혀 있다', await page.locator('#account').isVisible(), false);
+check('머리말에 계정으로 들어가는 문이 있다', await page.locator('#acctBtn').isVisible(), true);
+await page.locator('#acctBtn').click();
+await page.waitForTimeout(250);
+check('사람 표시를 누르면 열린다', await page.locator('#account').isVisible(), true);
+/* 계정 화면은 머리말까지 덮으므로 사람 표시가 가려진다 — 닫는 문은 `닫기` 하나다 */
+check('열려 있는 동안 사람 표시는 가려진다', await page.evaluate(() => {
+  const b = document.getElementById('acctBtn').getBoundingClientRect();
+  const top = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
+  return !!(top && top.closest('#account'));
+}), true);
+await page.locator('#acctClose').click();
+await page.waitForTimeout(250);
+check('닫기로 닫힌다', await page.locator('#account').isVisible(), false);
 const tbox = await page.locator('#weekTitle').boundingBox();
 await page.mouse.move(tbox.x + tbox.width / 2, tbox.y + tbox.height / 2);
 await page.mouse.down(); await page.waitForTimeout(680); await page.mouse.up();
@@ -511,6 +524,8 @@ async function login(pg, mail) {
 
 await login(page, 'me@example.com');
 check('로그인하면 주소가 잡힌다', await page.evaluate(() => Sync.email), 'me@example.com');
+check('로그인하면 사람 표시가 진해진다', await page.evaluate(() =>
+  document.getElementById('acctBtn').classList.contains('on')), true);
 
 /* PC에서 적은 것이 서버로 올라간다 */
 await page.locator('#acctClose').click();      // 계정 화면 닫기
@@ -570,6 +585,8 @@ await page.waitForTimeout(300);
 check('로그아웃해도 이 기기 기록은 남는다',
   await page.evaluate(() => App.week.days.mon.map(i => i.text)), ['PC에서 적음']);
 check('로그아웃하면 더 이상 올리지 않는다', await page.evaluate(() => Sync.email), null);
+check('로그아웃하면 사람 표시도 옅어진다', await page.evaluate(() =>
+  document.getElementById('acctBtn').classList.contains('on')), false);
 await phone.close();
 await page.locator('#acctClose').click();
 await page.waitForTimeout(200);
