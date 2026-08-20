@@ -91,7 +91,17 @@
   .note-line.warn { color: var(--ink); font-weight: 600; }
 
   /* 백업 — 제목을 꾹 누르면 열리는 한 줄. 설정 화면은 두지 않는다 */
-  .backup[hidden] { display: none; }        /* 클래스가 [hidden]을 이기지 않게 */
+  .drawer[hidden] { display: none; }        /* 클래스가 [hidden]을 이기지 않게 */
+  .drawer { flex: none; }
+  .backup[hidden] { display: none; }
+  .auth-input {
+    flex: 1 1 auto; min-width: 0; max-width: 180px;
+    border: none; border-bottom: 1px solid var(--rule); background: none;
+    font: inherit; font-size: 11px; color: var(--ink);
+    padding: 2px 0; outline: none;
+    -webkit-user-select: text; user-select: text;
+  }
+  .auth-input.code { max-width: 76px; letter-spacing: 0.22em; }
   .backup {
     flex: none;
     display: flex; align-items: baseline; gap: 12px;
@@ -294,11 +304,23 @@
     </div>
   </header>
   <p class="note-line" id="note" hidden></p>
-  <div class="backup" id="backup" hidden>
-    <button id="exportBtn" type="button">내보내기</button>
-    <button id="importBtn" type="button">가져오기</button>
-    <button id="guideBtn" type="button">쓰는 법</button>
-    <span class="msg" id="backupMsg"></span>
+  <div class="drawer" id="backup" hidden>
+    <div class="backup">
+      <button id="exportBtn" type="button">내보내기</button>
+      <button id="importBtn" type="button">가져오기</button>
+      <button id="guideBtn" type="button">쓰는 법</button>
+      <span class="msg" id="backupMsg"></span>
+    </div>
+    <div class="backup" id="authRow">
+      <button id="loginBtn" type="button">로그인</button>
+      <button id="logoutBtn" type="button" hidden>로그아웃</button>
+      <input id="loginEmail" class="auth-input" type="email" inputmode="email"
+             autocomplete="email" placeholder="메일 주소" hidden>
+      <input id="loginCode" class="auth-input code" type="text" inputmode="numeric"
+             autocomplete="one-time-code" maxlength="6" placeholder="여섯 자리" hidden>
+      <button id="authGo" type="button" hidden>보내기</button>
+      <span class="msg" id="authMsg"></span>
+    </div>
   </div>
   <div class="week" id="weekBody"></div>
 </main>
@@ -555,10 +577,13 @@ function weekTitle(monday) {
   return monday.getFullYear() + '. ' + fmt(monday) + '-' + fmt(end);
 }
 
+/* 기기 사이에서 합치려면 "언제 고쳤는지"가 있어야 한다.
+   `updatedAt`(항목) · `noteAt`(요일 메모) · `graves`(지운 항목 표시).
+   graves가 없으면 한쪽에서 지운 것이 다른 쪽에서 되살아난다. */
 function blankWeek(weekId) {
-  const days = {}, notes = {};
-  DAY_KEYS.forEach(k => { days[k] = []; notes[k] = ''; });
-  return { weekId, days, notes };
+  const days = {}, notes = {}, noteAt = {};
+  DAY_KEYS.forEach(k => { days[k] = []; notes[k] = ''; noteAt[k] = 0; });
+  return { weekId, days, notes, noteAt, graves: {} };
 }
 
 /* 저장이 막혀 있으면(사파리 사생활 모드·용량 초과) 알려야 한다.
@@ -590,15 +615,24 @@ function loadWeek(weekId) {
     const week = blankWeek(weekId);
     DAY_KEYS.forEach(k => {
       week.notes[k] = w.notes && typeof w.notes[k] === 'string' ? w.notes[k] : '';
+      week.noteAt[k] = Number(w.noteAt && w.noteAt[k]) || 0;
       const list = w.days && Array.isArray(w.days[k]) ? w.days[k] : [];
       week.days[k] = list.map(it => ({
         id: it.id || String(++uidSeq),
         text: String(it.text || ''),
         struck: !!it.struck,
         createdAt: it.createdAt || 0,
+        /* 예전에 저장된 주에는 없다 — 적은 시각으로 채운다 */
+        updatedAt: Number(it.updatedAt) || Number(it.createdAt) || 0,
         strikes: Array.isArray(it.strikes) ? it.strikes : [],
       }));
     });
+    if (w.graves && typeof w.graves === 'object') {
+      for (const id of Object.keys(w.graves)) {
+        const t = Number(w.graves[id]) || 0;
+        if (t) week.graves[id] = t;
+      }
+    }
     return week;
   } catch (e) {
     return blankWeek(weekId);
@@ -752,6 +786,114 @@ function importBackup(text) {
   if (!ids.length) return { error: '백업에 주가 없음' };
   return { added, kept, broken };
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   3-2. 동기화 — 로그인했을 때만 동작한다.
+        로그아웃 상태의 앱은 예전과 완전히 같다: localStorage 하나뿐.
+        합치기 판단은 서버에만 있다. 여기서는 보내고 받은 것을 그대로 쓴다.
+   ═══════════════════════════════════════════════════════════════ */
+const SYNC = {
+  pushDelayMs: 900,     // 고치고 이만큼 뒤에 올린다 (연달아 적을 때 매번 보내지 않게)
+  pollMs: 15000,        // 화면이 켜져 있는 동안 이 간격으로 맞춰 본다
+};
+
+/* 서버가 돌려주는 이유를 사람 말로 옮긴다. 조용히 실패하지 않는다 */
+const AUTH_ERRORS = {
+  'bad-email': '메일 주소 모양이 아닙니다',
+  'bad-code': '여섯 자리를 넣으세요',
+  'not-allowed': '허용된 주소가 아닙니다',
+  'allowlist-unconfigured': '서버에 허용 주소가 설정되지 않았습니다',
+  'mail-unconfigured': '서버에 메일 설정이 없습니다',
+  'storage-unconfigured': '서버 저장소가 연결되지 않았습니다',
+  'mail-failed': '메일을 보내지 못했습니다',
+  'too-many': '잠시 뒤에 다시 시도하세요',
+  'expired': '코드가 만료됐습니다 · 다시 받으세요',
+  'wrong-code': '코드가 다릅니다',
+  'unauthorized': '로그인이 풀렸습니다',
+};
+
+const Sync = {
+  email: null,          // 로그인한 주소. null이면 아무것도 하지 않는다
+  ready: false,         // 서버가 준비돼 있는지 (KV 바인딩 여부)
+  busy: false,
+  pending: false,
+  timer: null,
+  onChange: null,       // 화면에 알리는 콜백
+
+  async call(path, options) {
+    const res = await fetch(path, {
+      credentials: 'same-origin',
+      headers: { 'content-type': 'application/json' },
+      ...options,
+    });
+    let data = null;
+    try { data = await res.json(); } catch (e) { /* 몸통이 없을 수 있다 */ }
+    if (!res.ok) throw Object.assign(new Error((data && data.error) || res.status),
+                                     { status: res.status, code: data && data.error });
+    return data || {};
+  },
+
+  async start() {
+    try {
+      const me = await this.call('/api/me', { method: 'GET' });
+      this.ready = !!me.ready;
+      this.email = me.email || null;
+    } catch (e) { this.ready = false; this.email = null; }
+    if (this.onChange) this.onChange();
+    if (this.email) this.begin();
+  },
+
+  begin() {
+    clearInterval(this.timer);
+    this.timer = setInterval(() => {
+      if (document.visibilityState === 'visible') this.push();
+    }, SYNC.pollMs);
+  },
+
+  stop() { clearInterval(this.timer); this.timer = null; },
+
+  /* 지금 보는 주를 올리고, 합쳐진 것을 받아 그대로 쓴다.
+     올리기와 받기를 나누면 그 사이에 갈라진다 — 한 번에 한다. */
+  async push() {
+    if (!this.email || !this.host) return;
+    if (this.busy) { this.pending = true; return; }
+    this.busy = true;
+    try {
+      const week = this.host.currentWeek();
+      if (!week) return;
+      const out = await this.call('/api/sync', {
+        method: 'POST',
+        body: JSON.stringify({ weekId: week.weekId, week }),
+      });
+      if (out.week) this.host.adopt(out.week);
+      this.mark('');
+    } catch (e) {
+      if (e.status === 401) { this.email = null; this.stop(); if (this.onChange) this.onChange(); }
+      else this.mark('연결 안 됨');
+    } finally {
+      this.busy = false;
+      if (this.pending) { this.pending = false; this.push(); }
+    }
+  },
+
+  /* 로그인 직후·기기를 새로 이을 때 — 가진 주를 전부 올리고 전부 받아온다 */
+  async syncAll() {
+    if (!this.email || !this.host) return;
+    const out = await this.call('/api/sync/all', {
+      method: 'POST',
+      body: JSON.stringify({ weeks: this.host.allWeeks() }),
+    });
+    this.host.adoptAll(out.weeks || {});
+  },
+
+  schedule() {
+    if (!this.email) return;
+    clearTimeout(this.pushTimer);
+    this.pushTimer = setTimeout(() => this.push(), SYNC.pushDelayMs);
+  },
+
+  mark(text) { if (this.onChange) this.onChange(text); },
+};
 
 /* ═══════════════════════════════════════════════════════════════
    4. 사각사각 소리 — 필터를 통과시킨 노이즈의 음량을 손 속도로 조절
@@ -1318,6 +1460,12 @@ const App = {
     document.getElementById('next').addEventListener('click', () => this.shift(7));
     this.bindBackup();
     this.bindGuide();
+    this.bindAuth();
+    Sync.start();
+    /* 화면을 다시 켤 때가 기기를 바꾼 순간이다 — 그때 바로 맞춘다 */
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') Sync.push();
+    });
     if (!guideSeen()) this.openGuide();
 
     /* 화면 크기가 바뀌면 열 경계와 획을 다시 맞춘다 */
@@ -1363,7 +1511,48 @@ const App = {
     this.render();
   },
 
-  save() { if (!this.guideOn) saveWeek(this.week); },
+  save() {
+    if (this.guideOn) return;      // 표본은 저장도 동기화도 하지 않는다
+    saveWeek(this.week);
+    Sync.schedule();
+  },
+
+  /* ── 동기화가 화면을 건드리는 통로는 이 넷뿐이다 ─────────── */
+  currentWeek() { return this.guideOn ? null : this.week; },
+
+  adopt(week) {
+    if (this.guideOn || !week || week.weekId !== this.week.weekId) return;
+    /* 적는 중이면 아무것도 하지 않는다. 저장만 하고 화면을 그대로 두면
+       메모리의 주가 저장본과 어긋나고, 다음 저장 때 방금 받은 것을 덮어쓴다.
+       입력이 끝나는 순간 다시 맞춘다. */
+    if (document.querySelector('.entry, .sublabel-entry')) return;
+    saveWeek(week);
+    this.week = loadWeek(week.weekId);
+    this.render();
+  },
+
+  allWeeks() {
+    const out = {};
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (!k || k.indexOf(STORE_PREFIX) !== 0) continue;
+        const id = k.slice(STORE_PREFIX.length);
+        if (!WEEK_ID_RE.test(id)) continue;
+        out[id] = JSON.parse(localStorage.getItem(k));
+      }
+    } catch (e) { /* 깨진 주 하나가 전부를 막지 않는다 */ }
+    return out;
+  },
+
+  adoptAll(weeks) {
+    Object.keys(weeks).forEach(id => {
+      if (!WEEK_ID_RE.test(id)) return;
+      try { localStorage.setItem(STORE_PREFIX + id, JSON.stringify(weeks[id])); }
+      catch (e) { Store.fail(); }
+    });
+    if (!this.guideOn) { this.week = loadWeek(this.week.weekId); this.render(); }
+  },
 
   /* 머리말 아래 한 줄 — 지금은 저장이 막혔다는 알림에만 쓴다 */
   updateNote() {
@@ -1461,7 +1650,8 @@ const App = {
 
   makeItem(data, dayKey, listEl) {
     return new StrikeItem(data, {
-      save: () => this.save(),
+      /* 긋기·지우개도 여기를 지난다 — 합칠 때 어느 쪽이 나중인지 알아야 한다 */
+      save: () => { data.updatedAt = Date.now(); this.save(); },
       edit: item => this.editItem(item, dayKey, listEl),
       remove: item => this.removeItem(item, dayKey),
     });
@@ -1621,6 +1811,86 @@ const App = {
     });
   },
 
+  /* ── 로그인 — 서랍 안에 둔다. 설정 화면은 여전히 없다 ──────
+     링크가 아니라 여섯 자리 코드를 쓴다. 메일의 링크를 누르면 사파리가 열리는데,
+     홈 화면 앱과 사파리는 저장소가 달라서 앱은 로그아웃인 채로 남는다. */
+  bindAuth() {
+    const el = id => document.getElementById(id);
+    Sync.host = this;
+    Sync.onChange = msg => this.renderAuth(msg);
+
+    el('loginBtn').addEventListener('click', () => {
+      this.authStep = 'email';
+      this.renderAuth('');
+      el('loginEmail').focus();
+    });
+
+    el('logoutBtn').addEventListener('click', async () => {
+      try { await Sync.call('/api/auth/logout', { method: 'POST' }); }
+      catch (e) { /* 어차피 끊는다 */ }
+      Sync.email = null;
+      Sync.stop();
+      this.authStep = null;
+      this.renderAuth('로그아웃했습니다 · 이 기기의 기록은 그대로 있습니다');
+    });
+
+    el('authGo').addEventListener('click', () => this.authGo());
+    [el('loginEmail'), el('loginCode')].forEach(input => {
+      input.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); this.authGo(); }
+      });
+    });
+    this.renderAuth();
+  },
+
+  async authGo() {
+    const el = id => document.getElementById(id);
+    if (this.authBusy) return;
+    this.authBusy = true;
+    try {
+      if (this.authStep === 'email') {
+        const email = el('loginEmail').value.trim();
+        this.renderAuth('보내는 중…');
+        await Sync.call('/api/auth/request', { method: 'POST', body: JSON.stringify({ email }) });
+        this.authEmail = email;
+        this.authStep = 'code';
+        this.renderAuth('메일로 여섯 자리를 보냈습니다');
+        el('loginCode').value = '';
+        el('loginCode').focus();
+        return;
+      }
+      const code = el('loginCode').value.trim();
+      this.renderAuth('확인 중…');
+      const out = await Sync.call('/api/auth/verify', {
+        method: 'POST', body: JSON.stringify({ email: this.authEmail, code }),
+      });
+      Sync.email = out.email;
+      this.authStep = null;
+      this.renderAuth('맞추는 중…');
+      await Sync.syncAll();
+      Sync.begin();
+      this.renderAuth();
+    } catch (e) {
+      this.renderAuth(AUTH_ERRORS[e.code] || '안 됐습니다 · 잠시 뒤에 다시');
+    } finally {
+      this.authBusy = false;
+    }
+  },
+
+  renderAuth(msg) {
+    const el = id => document.getElementById(id);
+    const step = this.authStep;
+    el('loginBtn').hidden = !!Sync.email || !!step;
+    el('logoutBtn').hidden = !Sync.email;
+    el('loginEmail').hidden = step !== 'email';
+    el('loginCode').hidden = step !== 'code';
+    el('authGo').hidden = !step;
+    el('authGo').textContent = step === 'code' ? '확인' : '코드 받기';
+    el('authMsg').textContent = msg || (Sync.email
+      ? Sync.email + ' · 자동으로 맞춰집니다'
+      : (Sync.ready ? '이 기기에만 저장됩니다' : ''));
+  },
+
   /* 표본 주로 바꿔 그린 뒤 그 위에 설명을 얹는다. 닫으면 원래 주로 돌아온다.
      표본은 저장하지 않는다 — save()가 guideOn 동안 아무것도 하지 않는다. */
   openGuide() {
@@ -1752,6 +2022,7 @@ const App = {
       listEl.scrollLeft = 0;         // 넘친 항목은 칸을 나눠야 보인다
       listEl.scrollTop = 0;
       this.refreshCell(dayKey);
+      Sync.push();                   // 적기를 마쳤으니 이제 맞춰도 된다
     };
 
     /* 적힌 것이 있으면 항목으로 확정한다. 엔터로도, 딴 데를 눌러도 같다. */
@@ -1759,9 +2030,10 @@ const App = {
       const text = input.value.trim();
       if (!text) return false;
 
+      const now = Date.now();
       const data = {
-        id: String(++uidSeq) + '-' + Date.now(),
-        text, struck: false, createdAt: Date.now(), strikes: [],
+        id: String(++uidSeq) + '-' + now,
+        text, struck: false, createdAt: now, updatedAt: now, strikes: [],
       };
       this.week.days[dayKey].push(data);
       this.save();
@@ -1805,6 +2077,7 @@ const App = {
       const text = input.value.trim();
       input.remove();
       this.week.notes[key] = text;
+      this.week.noteAt[key] = Date.now();
       sub.textContent = text;
       sub.hidden = false;
       this.save();
@@ -1840,6 +2113,7 @@ const App = {
       input.remove();
       if (!text) { this.removeItem(item, dayKey); return; }
       item.data.text = text;
+      item.data.updatedAt = Date.now();
       item.textEl.textContent = text;
       this.save();
       item.el.hidden = false;                 // 제자리에 그대로 둔다
@@ -1862,6 +2136,8 @@ const App = {
     const list = this.week.days[dayKey];
     const i = list.indexOf(item.data);
     if (i >= 0) list.splice(i, 1);
+    /* 지웠다는 사실을 남긴다. 없으면 다른 기기와 합칠 때 되살아난다 */
+    if (item.data.id) this.week.graves[item.data.id] = Date.now();
     this.save();
     item.el.remove();
     const cell = this.cells[dayKey];

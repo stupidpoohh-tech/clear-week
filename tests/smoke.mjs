@@ -10,6 +10,8 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
+/* 합치기는 서버에만 있다. 모의 서버도 같은 함수를 쓴다 — 규칙이 갈라지지 않게 */
+import { mergeWeek, sanitizeWeek, blankWeek } from '../functions/_lib.js';
 
 /* playwright는 전역 설치본도 허용한다 (PLAYWRIGHT_MODULE로 경로 지정 가능) */
 const chromium = await (async () => {
@@ -23,8 +25,81 @@ const ROOT = new URL('..', import.meta.url).pathname;
 const PORT = 8231;
 const TYPES = { '.html': 'text/html', '.png': 'image/png', '.webmanifest': 'application/manifest+json' };
 
+/* ── 모의 서버 — Pages Functions 자리를 대신한다 ─────────────
+   KV·메일은 흉내만 낸다. 합치기와 주고받는 모양은 진짜와 같다. */
+const api = { weeks: {}, sessions: new Map(), codes: new Map(), lastCode: null };
+const readBody = req => new Promise(r => {
+  let b = ''; req.on('data', c => (b += c)); req.on('end', () => { try { r(JSON.parse(b || '{}')); } catch { r({}); } });
+});
+const cookieOf = req => {
+  const m = /(?:^|;\s*)cw_session=([^;]+)/.exec(req.headers.cookie || '');
+  return m ? m[1] : null;
+};
+const send = (res, code, data, headers = {}) => {
+  res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', ...headers });
+  res.end(JSON.stringify(data));
+};
+
+async function handleApi(req, res, url) {
+  const email = api.sessions.get(cookieOf(req)) || null;
+
+  if (url === '/api/me') return send(res, 200, { email, ready: true });
+
+  if (url === '/api/auth/request') {
+    const { email: to } = await readBody(req);
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(to || ''))) return send(res, 400, { error: 'bad-email' });
+    api.lastCode = String(Math.floor(Math.random() * 1e6)).padStart(6, '0');
+    api.codes.set(String(to).toLowerCase(), api.lastCode);
+    return send(res, 200, { ok: true });
+  }
+
+  if (url === '/api/auth/verify') {
+    const b = await readBody(req);
+    const want = api.codes.get(String(b.email || '').toLowerCase());
+    if (!want || want !== String(b.code)) return send(res, 400, { error: 'wrong-code' });
+    api.codes.delete(String(b.email).toLowerCase());
+    const token = 'a'.repeat(48) + api.sessions.size;
+    api.sessions.set(token, String(b.email).toLowerCase());
+    return send(res, 200, { ok: true, email: String(b.email).toLowerCase() },
+      { 'set-cookie': `cw_session=${token}; Path=/; SameSite=Lax; Max-Age=999999` });
+  }
+
+  if (url === '/api/auth/logout') {
+    api.sessions.delete(cookieOf(req));
+    return send(res, 200, { ok: true }, { 'set-cookie': 'cw_session=; Path=/; Max-Age=0' });
+  }
+
+  if (!email) return send(res, 401, { error: 'unauthorized' });
+
+  if (url === '/api/sync') {
+    const b = await readBody(req);
+    const id = String(b.weekId || '');
+    const merged = mergeWeek(sanitizeWeek(b.week, id),
+      api.weeks[id] ? sanitizeWeek(api.weeks[id], id) : blankWeek(id));
+    api.weeks[id] = merged;
+    return send(res, 200, { week: merged });
+  }
+
+  if (url === '/api/sync/all') {
+    const b = await readBody(req);
+    const incoming = b.weeks || {};
+    const ids = new Set([...Object.keys(api.weeks), ...Object.keys(incoming)]);
+    const weeks = {};
+    for (const id of ids) {
+      const merged = mergeWeek(sanitizeWeek(incoming[id], id),
+        api.weeks[id] ? sanitizeWeek(api.weeks[id], id) : blankWeek(id));
+      api.weeks[id] = merged;
+      weeks[id] = merged;
+    }
+    return send(res, 200, { weeks });
+  }
+  return send(res, 404, { error: 'not-found' });
+}
+
 const server = createServer(async (req, res) => {
-  const path = join(ROOT, req.url === '/' ? 'index.html' : req.url.split('?')[0]);
+  const url = req.url.split('?')[0];
+  if (url.startsWith('/api/')) return handleApi(req, res, url);
+  const path = join(ROOT, url === '/' ? 'index.html' : url);
   try {
     const body = await readFile(path);
     res.writeHead(200, { 'Content-Type': TYPES[extname(path)] || 'application/octet-stream' });
@@ -323,11 +398,103 @@ await page.waitForTimeout(200);
 
 console.log('\n── 저장 실패 ──');
 /* 사파리 사생활 모드처럼 저장이 막힌 상황 */
-await page.evaluate(() => { Storage.prototype.setItem = () => { throw new Error('blocked'); }; });
+await page.evaluate(() => {
+  window.origSetItem = Storage.prototype.setItem;
+  Storage.prototype.setItem = () => { throw new Error('blocked'); };
+});
 await page.evaluate(() => App.save());
 await page.waitForTimeout(150);
 check('저장이 막히면 알린다', await page.locator('#note').isVisible(), true);
 check('알림 문구', /^저장 안 됨/.test(await page.locator('#note').textContent()), true);
+
+console.log('\n── 로그인 · 동기화 ──');
+/* 로그아웃 상태의 앱은 예전과 완전히 같아야 한다 */
+await page.evaluate(() => { Storage.prototype.setItem = origSetItem; });
+await page.reload(); await page.waitForTimeout(500);
+check('로그아웃 상태에서는 이 기기에만 저장', await page.evaluate(() => Sync.email), null);
+
+async function openDrawer(pg) {
+  const b = await pg.locator('#weekTitle').boundingBox();
+  await pg.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+  await pg.mouse.down(); await pg.waitForTimeout(680); await pg.mouse.up();
+  await pg.waitForTimeout(250);
+}
+async function login(pg, mail) {
+  await openDrawer(pg);
+  await pg.locator('#loginBtn').click();
+  await pg.locator('#loginEmail').fill(mail);
+  await pg.locator('#authGo').click();
+  await pg.waitForTimeout(250);
+  await pg.locator('#loginCode').fill(api.lastCode);
+  await pg.locator('#authGo').click();
+  await pg.waitForFunction(() => Sync.email !== null, null, { timeout: 5000 });
+  await pg.waitForTimeout(400);
+}
+
+await login(page, 'me@example.com');
+check('로그인하면 주소가 잡힌다', await page.evaluate(() => Sync.email), 'me@example.com');
+
+/* PC에서 적은 것이 서버로 올라간다 */
+await page.mouse.click(195, 740);              // 서랍 닫기
+await page.waitForTimeout(200);
+await tapLabel(0);
+await type(['PC에서 적음']);
+await page.locator('#weekTitle').click();      // 입력 끝내기
+await page.waitForTimeout(1400);
+check('적은 것이 서버에 올라간다',
+  Object.values(api.weeks).some(w => w.days.mon.some(i => i.text === 'PC에서 적음')), true);
+
+/* 폰 = 저장소가 다른 새 브라우저 */
+const phone = await (await browser.newContext({ viewport: { width: 390, height: 760 } })).newPage();
+await phone.goto(`http://127.0.0.1:${PORT}/index.html`);
+await phone.waitForTimeout(400);
+await phone.evaluate(() => { markGuideSeen(); document.getElementById('guide').hidden = true; App.closeGuide && App.closeGuide(); });
+await phone.reload(); await phone.waitForTimeout(500);
+check('폰은 처음엔 비어 있다', await phone.evaluate(() => App.week.days.mon.length), 0);
+
+await login(phone, 'me@example.com');
+check('폰에서 로그인하면 받아온다',
+  await phone.evaluate(() => App.week.days.mon.map(i => i.text)), ['PC에서 적음']);
+
+/* 양쪽에서 따로 적으면 둘 다 남는다 */
+await phone.mouse.click(195, 740);
+await phone.waitForTimeout(200);
+await phone.evaluate(() => {
+  const now = Date.now();
+  App.week.days.mon.push({ id: 'phone-1', text: '폰에서 적음', struck: false,
+    createdAt: now, updatedAt: now, strikes: [] });
+  App.save();
+});
+await phone.waitForTimeout(1500);
+await page.evaluate(() => Sync.push());
+await page.waitForTimeout(600);
+check('양쪽에서 적은 것이 둘 다 남는다',
+  await page.evaluate(() => App.week.days.mon.map(i => i.text)), ['PC에서 적음', '폰에서 적음']);
+
+/* 한쪽에서 지우면 다른 쪽에서도 지워진다 (되살아나지 않는다) */
+await page.evaluate(() => {
+  const item = App.cells.mon.items.find(i => i.data.text === '폰에서 적음');
+  App.removeItem(item, 'mon');
+});
+await page.waitForTimeout(1500);
+await phone.evaluate(() => Sync.push());
+await phone.waitForTimeout(600);
+check('지운 것은 다른 기기에서도 사라진다',
+  await phone.evaluate(() => App.week.days.mon.map(i => i.text)), ['PC에서 적음']);
+await phone.evaluate(() => Sync.push());
+await phone.waitForTimeout(600);
+check('지운 것이 되살아나지 않는다',
+  await phone.evaluate(() => App.week.days.mon.map(i => i.text)), ['PC에서 적음']);
+
+await openDrawer(page);
+await page.locator('#logoutBtn').click();
+await page.waitForTimeout(300);
+check('로그아웃해도 이 기기 기록은 남는다',
+  await page.evaluate(() => App.week.days.mon.map(i => i.text)), ['PC에서 적음']);
+check('로그아웃하면 더 이상 올리지 않는다', await page.evaluate(() => Sync.email), null);
+await phone.close();
+await page.mouse.click(195, 740);
+await page.waitForTimeout(200);
 
 console.log('\n── 확대 차단 ──');
 check('확대 제스처 preventDefault', await page.evaluate(() =>
