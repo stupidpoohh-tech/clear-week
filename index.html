@@ -219,45 +219,44 @@
     pointer-events: none;
   }
 
-  /* ── 첫 실행 안내 — 한 장만. 종이에 끼워 둔 안내 쪽지 ────── */
+  /* ── 첫 실행 안내 — 표본 주 위에 설명을 얹는다 ──────────────
+     화면을 가리지 않는다. 실제로 쓰이는 자리 옆에 한 마디씩 붙는다. */
   .guide[hidden] { display: none; }     /* 클래스가 [hidden]을 이기지 않게 */
-  .guide {
-    position: fixed; inset: 0; z-index: 10;
-    display: flex; align-items: center; justify-content: center;
-    background: rgba(255, 255, 255, 0.94);   /* 아래 종이가 비쳐 보인다 */
-    padding: 24px;
-    touch-action: none;
-  }
-  .guide-card { width: 100%; max-width: 300px; }
-  .guide h2 {
-    font-size: 11px; font-weight: 700; letter-spacing: 0.06em;
+  .guide { position: fixed; inset: 0; z-index: 10; touch-action: none; }
+  .guide-hint {
+    position: absolute;
+    display: flex; gap: 5px;
+    font-size: 10.5px; line-height: 1.45;
     color: var(--ink-faint);
-    padding-bottom: 9px; border-bottom: 1px solid var(--rule);
+    background: var(--paper);          /* 표본 글자와 겹쳐도 읽히게 */
+    word-break: keep-all;              /* 한글이 낱자로 끊기지 않게 */
+    pointer-events: none;
   }
-  .guide ul { list-style: none; }
-  .guide li {
-    display: flex; align-items: baseline; gap: 11px;
-    padding: 10px 0; border-bottom: 1px solid var(--rule-soft);
-    font-size: 12px; line-height: 1.5;
-    word-break: keep-all;      /* 한글이 낱자 단위로 끊기지 않게 */
+  .guide-hint i { font-style: normal; flex: none; }
+  .guide-hint b { color: var(--ink); font-weight: 700; }
+  .guide-hint.plain { font-size: 10px; }
+  /* 가리키는 자리에 두르는 동그라미 — 안내에만 쓰는 표시 */
+  .guide-ring {
+    position: absolute;
+    border: 1px solid var(--ink-faint); border-radius: 50%;
+    pointer-events: none;
   }
-  .guide li svg { flex: none; width: 26px; height: 11px; }
-  .guide li b { font-weight: 700; }
-  .guide li span { color: var(--ink-faint); }
-  .guide-note {
-    padding-top: 11px; font-size: 11px; line-height: 1.6;
-    color: var(--ink-faint); word-break: keep-all;
-  }
-  .guide-actions {
+  .guide-bar {
+    position: absolute; left: 50%; transform: translateX(-50%);
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+    width: 100%; max-width: 560px;
     display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
-    padding-top: 16px;
+    padding: 6px calc(env(safe-area-inset-right, 0px) + 18px)
+             6px calc(env(safe-area-inset-left, 0px) + 18px);
+    background: var(--paper);
+    border-top: 1px solid var(--rule);
   }
-  .guide-actions button {
+  .guide-bar button {
     border: none; background: none; font: inherit;
     font-size: 12px; font-weight: 700; color: var(--ink);
-    padding: 6px 0; cursor: pointer; touch-action: none;
+    padding: 5px 0; cursor: pointer; touch-action: none;
   }
-  .guide-actions em { font-style: normal; font-size: 10px; color: var(--ink-faint); }
+  .guide-bar em { font-style: normal; font-size: 10px; color: var(--ink-faint); }
 
   /* ── 입력 ────────────────────────────────────────────────── */
   .entry {
@@ -293,43 +292,10 @@
 <input id="importFile" type="file" accept="application/json,.json" hidden>
 
 <div class="guide" id="guide" hidden>
-  <div class="guide-card">
-    <h2>쓰는 법</h2>
-    <ul>
-      <li>
-        <svg viewBox="0 0 26 11" fill="none" stroke="#9a9eab" stroke-width="1.2" aria-hidden="true">
-          <circle cx="13" cy="5.5" r="2.6" fill="#9a9eab" stroke="none"/>
-        </svg>
-        <div><b>날짜를 누른다</b> — <span>그 줄에 바로 적힙니다. ＋ 버튼은 없습니다</span></div>
-      </li>
-      <li>
-        <svg viewBox="0 0 26 11" fill="none" stroke="#9a9eab" stroke-width="1.2" stroke-linecap="round" aria-hidden="true">
-          <path d="M2 5.5H22M18.5 2.5L22 5.5L18.5 8.5"/>
-        </svg>
-        <div><b>글자 위를 긋는다</b> — <span>다 한 일에 취소선. 그은 것은 사라지지 않고 그 자리에 남습니다</span></div>
-      </li>
-      <li>
-        <svg viewBox="0 0 26 11" fill="none" stroke="#9a9eab" stroke-width="1.2" stroke-linecap="round" aria-hidden="true">
-          <path d="M4 5.5H22M7.5 2.5L4 5.5L7.5 8.5M18.5 2.5L22 5.5L18.5 8.5"/>
-        </svg>
-        <div><b>그은 자리를 문댄다</b> — <span>잘못 그었으면 문질러 벗겨냅니다</span></div>
-      </li>
-      <li>
-        <svg viewBox="0 0 26 11" fill="none" stroke="#9a9eab" stroke-width="1.2" aria-hidden="true">
-          <circle cx="13" cy="5.5" r="2.2" fill="#9a9eab" stroke="none"/>
-          <circle cx="13" cy="5.5" r="4.8"/>
-        </svg>
-        <div><b>꾹 누른다</b> — <span>0.5초. 그 항목이 지워집니다</span></div>
-      </li>
-    </ul>
-    <p class="guide-note">
-      칸은 적은 만큼 저절로 나뉩니다. 지난 주는 열람만 됩니다.<br>
-      못 한 일은 다음 주로 넘어가지 않습니다.
-    </p>
-    <div class="guide-actions">
-      <button id="guideNever" type="button">다시 보지 않기</button>
-      <em>아무 데나 누르면 닫힘</em>
-    </div>
+  <div id="guideHints"></div>
+  <div class="guide-bar">
+    <button id="guideNever" type="button">다시 보지 않기</button>
+    <em>예시 화면입니다 · 아무 데나 누르면 닫힘</em>
   </div>
 </div>
 
@@ -518,27 +484,20 @@ function haptic(on) {
 const STORE_PREFIX = 'clearweek:';
 const DAY_KEYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun', 'free'];
 const WEEK_DAYS = DAY_KEYS.slice(0, 7);   /* 왼쪽 열에 세로로 쌓이는 요일 칸 */
-/* 칸은 스스로 나뉜다 — 항목이 늘면 열이 늘어난다.
-   세로선은 긋지도 그리지도 않는다. 표가 선으로 지저분해지지 않게. */
+/* 칸은 스스로 나뉜다 — 한 열에 안 들어가면 열이 늘어난다.
+   세로선은 긋지도 그리지도 않는다. 표가 선으로 지저분해지지 않게.
+
+   기준을 항목 수로 못 박지 않는 이유: 한 열에 들어가는 줄 수가 화면 높이에 따라
+   다르다(작은 폰 3줄, 큰 폰 4줄). 숫자를 박으면 어떤 폰에서는 자리가 남는데
+   나뉘고, 어떤 폰에서는 나뉘어도 잘린다. 실제로 넘치는지 보고 정한다. */
 const AUTO_SPLIT = {
-  toTwo: 3,      // 항목이 이보다 많으면 2단
-  toThree: 6,    // 이보다 많으면 3단
+  maxColumns: 3,   // 한 칸을 최대 이만큼까지 나눈다
 };
 
-/* 요일 칸만 나뉜다. note 칸은 화면 높이 전체라 한 열로 충분하다. */
-function columnCount(key, itemCount) {
-  if (key === 'free') return 1;
-  if (itemCount > AUTO_SPLIT.toThree) return 3;
-  if (itemCount > AUTO_SPLIT.toTwo) return 2;
-  return 1;
-}
-
 /* 열 수를 칸에 반영한다. 나눌수록 그 칸의 글씨가 작아진다. */
-function applyColumns(section, bodyEl, key, itemCount) {
-  const cols = columnCount(key, itemCount);
+function applyColumns(section, bodyEl, cols) {
   section.dataset.splits = String(cols - 1);   /* 글씨 크기가 여기에 따라간다 */
   bodyEl.style.columnCount = String(cols);
-  return cols;
 }
 
 /* 라벨을 꾹 눌러 아래로 끌면 요일 아래 메모를 적는다 */
@@ -647,6 +606,35 @@ function guideSeen() {
   try { return localStorage.getItem(GUIDE_KEY) === '1'; }
   catch (e) { return false; }        // 저장이 막혔으면 매번 보여 준다
 }
+
+/* 안내에 쓰는 표본 주 — 저장하지 않는다. 칸마다 한 가지씩만 보여 준다.
+   한 칸에 두 마디를 붙이면 설명이 서로 겹친다. */
+function guideSample(weekId) {
+  const w = blankWeek(weekId);
+  const mk = (text, struck) => ({
+    id: 'guide-' + (++uidSeq), text, struck: !!struck, createdAt: 0,
+    strikes: struck ? [{ line: 0, a: 0.01, b: 0.98, seed: 1074304443 }] : [],
+  });
+  w.days.tue = [mk('장보기')];
+  w.days.wed = [mk('회의자료 정리', true)];
+  w.days.thu = [mk('낭만백수달'), mk('영상편집')];
+  w.days.free = [mk('영어 단어'), mk('책 반납')];
+  return w;
+}
+
+/* at: [무엇, 어느 칸, 몇 번째 항목] */
+const GUIDE_HINTS = [
+  { at: ['label', 'mon'], ring: true,
+    verb: '날짜를 누른다', tail: '그 줄에 바로 적힙니다. ＋ 버튼은 없습니다' },
+  { at: ['item', 'tue', 0],
+    verb: '글자 위를 옆으로 긋는다', tail: '다 한 일에 취소선' },
+  { at: ['item', 'wed', 0],
+    verb: '그은 자리를 문댄다', tail: '잘못 그었으면 문질러 벗겨냅니다' },
+  { at: ['item', 'thu', 0],
+    verb: '꾹 누른다', tail: '0.5초. 그 항목이 지워집니다' },
+  { at: ['cell', 'fri'], plain: true,
+    tail: '그은 것은 사라지지 않고 그 자리에 남습니다. 칸은 적은 만큼 저절로 나뉩니다.' },
+];
 
 function markGuideSeen() {
   try { localStorage.setItem(GUIDE_KEY, '1'); }
@@ -814,7 +802,7 @@ const Sound = {
 class StrikeItem {
   constructor(data, host) {
     this.data = data;      // { id, text, struck, createdAt, strikes: [] }
-    this.host = host;      // { readOnly, save(), edit(item), remove(item) }
+    this.host = host;      // { save(), edit(item), remove(item) }
 
     this.el = document.createElement('div');
     this.el.className = 'item';
@@ -912,7 +900,7 @@ class StrikeItem {
 
   /* ── 제스처 ──────────────────────────────────────────────── */
   onDown(e) {
-    if (this.host.readOnly || this.status === 'animating' || this.pointer) return;
+    if (this.status === 'animating' || this.pointer) return;
     Sound.init();
     Sound.resume();
     this.el.setPointerCapture(e.pointerId);
@@ -1155,7 +1143,7 @@ class StrikeItem {
 
   /* ── 더블탭: 아직 안 그어진 줄을 전부 자동으로 긋기 ──────── */
   autoStrike() {
-    if (this.host.readOnly || this.status !== 'idle') return;
+    if (this.status !== 'idle') return;
     const rowRect = this.el.getBoundingClientRect();
     const rects = lineRects(this.textEl);
     const targets = [];
@@ -1302,7 +1290,7 @@ class StrikeItem {
 const App = {
   monday: null,
   week: null,
-  readOnly: false,
+  guideOn: false,
 
   init() {
     Store.onBlocked = () => this.updateNote();
@@ -1319,7 +1307,10 @@ const App = {
     let resizeTimer = null;
     window.addEventListener('resize', () => {
       clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(() => this.relayoutAll(), 120);
+      resizeTimer = setTimeout(() => {
+        this.relayoutAll();
+        if (this.guideOn) this.layoutGuideHints();
+      }, 120);
     });
   },
 
@@ -1351,22 +1342,19 @@ const App = {
 
   go(monday) {
     this.monday = monday;
-    this.readOnly = monday < this.thisMonday;      // 넘긴 페이지는 고쳐 쓰지 않는다
     this.week = loadWeek(isoWeekId(monday));
     this.render();
   },
 
-  save() { saveWeek(this.week); },
+  save() { if (!this.guideOn) saveWeek(this.week); },
 
-  /* 머리말 아래 한 줄 — 저장이 막혔다는 알림이 열람 전용 안내보다 먼저다 */
+  /* 머리말 아래 한 줄 — 지금은 저장이 막혔다는 알림에만 쓴다 */
   updateNote() {
     const note = document.getElementById('note');
-    const blocked = Store.blocked;
-    const msg = blocked ? '저장 안 됨 — 사생활 모드이거나 용량이 찼습니다'
-              : this.readOnly ? '지난 주 — 열람만' : '';
+    const msg = Store.blocked ? '저장 안 됨 — 사생활 모드이거나 용량이 찼습니다' : '';
     note.hidden = !msg;
     note.textContent = msg;
-    note.classList.toggle('warn', blocked);
+    note.classList.toggle('warn', !!msg);
   },
 
   render() {
@@ -1402,8 +1390,8 @@ const App = {
     const gutter = document.createElement('div');
     gutter.className = 'cell-gutter';
 
-    const label = document.createElement(this.readOnly ? 'div' : 'button');
-    if (!this.readOnly) label.type = 'button';
+    const label = document.createElement('button');
+    label.type = 'button';
     label.className = 'cell-label';
     label.textContent = cellLabel(key, this.monday);
 
@@ -1416,7 +1404,7 @@ const App = {
     section.appendChild(gutter);
     section.appendChild(listEl);
 
-    if (!this.readOnly) {
+    {
       /* 살짝 누르면 항목 추가, 꾹 눌러 아래로 끌면 요일 아래 메모 */
       let g = null;
       label.addEventListener('pointerdown', e => {
@@ -1456,7 +1444,6 @@ const App = {
 
   makeItem(data, dayKey, listEl) {
     return new StrikeItem(data, {
-      readOnly: this.readOnly,
       save: () => this.save(),
       edit: item => this.editItem(item, dayKey, listEl),
       remove: item => this.removeItem(item, dayKey),
@@ -1468,9 +1455,22 @@ const App = {
     if (!cell) return;
     cell.listEl.scrollLeft = 0;      // 입력 중 밀려 있던 가로 위치를 되돌린다
     cell.listEl.scrollTop = 0;
-    applyColumns(cell.section, cell.listEl, key, cell.items.length);
+    this.fitColumns(key);
     cell.items.forEach(item => { item.clearStrokes(); item.restore(); });
     this.updateOverflow(key);
+  },
+
+  /* 한 열에 다 들어가면 한 열로 둔다. 넘치면 하나 늘려 다시 재 본다.
+     note 칸은 화면 높이 전체라 한 열로 충분하므로 나누지 않는다. */
+  fitColumns(key) {
+    const cell = this.cells[key];
+    const max = key === 'free' ? 1 : AUTO_SPLIT.maxColumns;
+    for (let cols = 1; cols < max; cols++) {
+      applyColumns(cell.section, cell.listEl, cols);
+      if (this.hiddenCount(cell) === 0) return cols;
+    }
+    applyColumns(cell.section, cell.listEl, max);
+    return max;
   },
 
   /* 항목이 늘거나 줄면 열 수가 바뀔 수 있다. 바뀌면 글씨 크기도 바뀌므로
@@ -1479,7 +1479,7 @@ const App = {
     const cell = this.cells[key];
     if (!cell) return;
     const before = cell.listEl.style.columnCount;
-    applyColumns(cell.section, cell.listEl, key, cell.items.length);
+    this.fitColumns(key);
     if (cell.listEl.style.columnCount !== before) {
       cell.items.forEach(item => { item.clearStrokes(); item.restore(); });
     }
@@ -1604,12 +1604,87 @@ const App = {
     });
   },
 
-  openGuide() { document.getElementById('guide').hidden = false; },
-  closeGuide() { document.getElementById('guide').hidden = true; },
+  /* 표본 주로 바꿔 그린 뒤 그 위에 설명을 얹는다. 닫으면 원래 주로 돌아온다.
+     표본은 저장하지 않는다 — save()가 guideOn 동안 아무것도 하지 않는다. */
+  openGuide() {
+    if (this.guideOn) return;
+    this.guideOn = true;
+    this.realWeek = this.week;
+    this.week = guideSample(this.week.weekId);
+    this.render();
+    document.getElementById('guide').hidden = false;
+    requestAnimationFrame(() => this.layoutGuideHints());
+  },
+
+  closeGuide() {
+    if (!this.guideOn) return;
+    document.getElementById('guide').hidden = true;
+    document.getElementById('guideHints').innerHTML = '';
+    this.guideOn = false;
+    this.week = this.realWeek;
+    this.realWeek = null;
+    this.render();
+  },
+
+  guideAnchor(at) {
+    const cell = this.cells[at[1]];
+    if (!cell) return null;
+    if (at[0] === 'label') return cell.section.querySelector('.cell-label');
+    if (at[0] === 'item') return cell.items[at[2]] ? cell.items[at[2]].textEl : null;
+    return cell.listEl;
+  },
+
+  /* 설명은 가리키는 것의 오른쪽에 놓고, 요일 열 안에서 끝낸다 */
+  layoutGuideHints() {
+    const wrap = document.getElementById('guideHints');
+    wrap.innerHTML = '';
+    const daysEl = document.querySelector('.days');
+    if (!daysEl) return;
+    const daysRight = daysEl.getBoundingClientRect().right;
+
+    GUIDE_HINTS.forEach(h => {
+      const anchor = this.guideAnchor(h.at);
+      if (!anchor) return;
+      const r = anchor.getBoundingClientRect();
+      let left = h.plain ? r.left : r.right + 10;
+      let top = h.plain ? r.top + 6 : r.top - 2;
+      let width = daysRight - left - 6;
+      /* 오른쪽에 자리가 없으면(좁은 화면) 그 아랫줄로 내린다.
+         요일 열 밖으로 삐져나가면 note 칸 글자와 겹친다. */
+      if (!h.plain && width < 104) {
+        left = r.left;
+        top = r.bottom + 2;
+        width = daysRight - left - 6;
+      }
+
+      const el = document.createElement('div');
+      el.className = 'guide-hint' + (h.plain ? ' plain' : '');
+      el.style.left = Math.round(left) + 'px';
+      el.style.top = Math.round(top) + 'px';
+      el.style.width = Math.round(Math.max(60, width)) + 'px';
+      if (h.plain) {
+        el.appendChild(document.createElement('span')).textContent = h.tail;
+      } else {
+        el.appendChild(document.createElement('i')).textContent = '←';
+        const span = el.appendChild(document.createElement('span'));
+        span.appendChild(document.createElement('b')).textContent = h.verb;
+        span.appendChild(document.createTextNode(' — ' + h.tail));
+      }
+      wrap.appendChild(el);
+
+      if (h.ring) {
+        const ring = wrap.appendChild(document.createElement('div'));
+        ring.className = 'guide-ring';
+        ring.style.left = Math.round(r.left - 6) + 'px';
+        ring.style.top = Math.round(r.top - 3) + 'px';
+        ring.style.width = Math.round(r.width + 12) + 'px';
+        ring.style.height = Math.round(r.height + 6) + 'px';
+      }
+    });
+  },
 
   /* ── 적기: 인라인 입력, 엔터로 연속 입력 ─────────────────── */
   openEntry(dayKey, listEl) {
-    if (this.readOnly) return;
     const open = listEl.querySelector('.entry');
     if (open) { open.focus(); return; }
 
@@ -1666,7 +1741,7 @@ const App = {
 
   /* ── 요일 아래 메모 — 6.5pt 세미볼드 ─────────────────────── */
   openSublabel(key, gutter, sub) {
-    if (this.readOnly || gutter.querySelector('.sublabel-entry')) return;
+    if (gutter.querySelector('.sublabel-entry')) return;
 
     const input = document.createElement('input');
     input.className = 'sublabel-entry';
@@ -1701,7 +1776,7 @@ const App = {
 
   /* ── 편집: 그어진 항목은 편집 불가 ───────────────────────── */
   editItem(item, dayKey, listEl) {
-    if (this.readOnly || item.data.struck) return;
+    if (item.data.struck) return;
     const input = document.createElement('input');
     input.className = 'entry';
     input.type = 'text';
@@ -1737,7 +1812,6 @@ const App = {
 
   /* ── 삭제: 롱프레스. 확인 다이얼로그 없음 ────────────────── */
   removeItem(item, dayKey) {
-    if (this.readOnly) return;
     const list = this.week.days[dayKey];
     const i = list.indexOf(item.data);
     if (i >= 0) list.splice(i, 1);
