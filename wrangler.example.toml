@@ -1,0 +1,21 @@
+# ⚠️ 이 파일의 이름을 `wrangler.toml`로 바꾸지 말 것.
+#
+# 저장소 루트에 `wrangler.toml`이 있으면 Cloudflare Pages가 설정을 그 파일에서만
+# 읽고 **대시보드의 Bindings·Variables 편집을 잠근다.** Add 버튼이 회색이 된다.
+# 대시보드로 설정하는 지금 방식(SETUP.md)과 같이 쓸 수 없다.
+#
+# 로컬에서 서버까지 돌려 보고 싶을 때만 이 파일을 `wrangler.toml`로 복사해서 쓰고,
+# **커밋하지 말 것** (.gitignore에 들어 있다).
+#
+#   cp wrangler.example.toml wrangler.toml
+#   npx wrangler pages dev .
+#
+# 비밀값은 `.dev.vars`에 둔다 (역시 커밋하지 않는다).
+
+name = "clear-week"
+pages_build_output_dir = "."
+compatibility_date = "2026-08-01"
+
+[[kv_namespaces]]
+binding = "CLEARWEEK"
+id = "<대시보드 Storage & Databases → KV 에서 만든 네임스페이스 ID>"

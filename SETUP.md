@@ -8,6 +8,18 @@
 
 ---
 
+> ### ⚠️ 저장소 루트에 `wrangler.toml`을 두지 말 것
+>
+> 이 파일이 있으면 Pages가 설정을 그 파일에서만 읽고 **대시보드의
+> Bindings·Variables 편집을 잠근다** — `+ Add` 버튼이 회색이 되고
+> "Bindings for this project are being managed through wrangler.toml"이 뜬다.
+> 아래는 전부 대시보드로 설정하는 방법이므로 그 파일이 없어야 한다.
+> 로컬 개발용 견본은 `wrangler.example.toml`에 있고, 쓸 때만 복사해서 쓴다
+> (`.gitignore`가 `wrangler.toml`을 막아 둔다).
+>
+> 이미 잠겨 있다면: 저장소에서 `wrangler.toml`을 지우고 푸시 →
+> **배포가 끝나기를 기다린 뒤** 대시보드를 새로고침하면 풀린다.
+
 ## 1. KV 네임스페이스 만들기 · 묶기
 
 Cloudflare 대시보드 → **Storage & Databases → KV → Create**
@@ -73,11 +85,12 @@ Production과 Preview **양쪽에** 걸어 둔다.
 ## 로컬에서 서버까지 돌려 보기
 
 ```
+cp wrangler.example.toml wrangler.toml     # 커밋하지 말 것 (.gitignore가 막는다)
 npx wrangler pages dev .
 ```
 
-`wrangler.toml`의 주석을 풀고 KV id를 넣어야 한다. 비밀값은 `.dev.vars`에 둔다
-(**커밋하지 말 것**).
+`wrangler.toml`의 KV id를 채워야 한다. 비밀값은 `.dev.vars`에 둔다 (역시 커밋하지 않는다).
+**다 쓰면 `wrangler.toml`을 지운다** — 남겨 두고 푸시하면 대시보드가 잠긴다.
 
 ## 돈
 

@@ -38,6 +38,7 @@
 | `functions/api/…` | 로그인(코드 메일)·동기화 (Cloudflare Pages Functions) |
 | `tests/merge.mjs` | 합치기 검사 (`node tests/merge.mjs`) — 브라우저 불필요 |
 | `SETUP.md` | 서버를 켜려면 대시보드에서 해야 하는 일 |
+| `wrangler.example.toml` | 로컬 개발용 견본. **`wrangler.toml`로 커밋하면 대시보드가 잠긴다** |
 
 `index.html` 안의 구조 — 위에서부터 CSS 변수 → `STROKE`/`ERASE`/`SOUND`/`SPLIT`
 상수 → 유틸 → 저장·백업 → 소리 → `StrikeItem`(항목 하나) → `App`(화면).
@@ -144,9 +145,12 @@
    불가"였는데, 한 화면 고정 요구에 밀려 내려갔다. 손맛에 영향이 있는지 미확인.
 3. **백업 경로가 실기기에서 미검증.** 아이폰 공유 시트로 파일이 제대로 떨어지는지,
    홈 화면 앱(standalone)에서도 되는지는 실기기에서만 알 수 있다.
-4. **서버는 배포·실기기 미검증.** 모의 서버로만 확인했다. KV 바인딩·메일 발송은
+4. **`wrangler.toml`을 저장소에 두면 안 된다.** 있으면 Pages가 설정을 그 파일에서만
+   읽고 대시보드 Bindings 편집을 잠근다. 견본은 `wrangler.example.toml`이고
+   `.gitignore`가 `wrangler.toml`을 막는다 (2026-08-20에 한 번 밟았다).
+5. **서버는 배포·실기기 미검증.** 모의 서버로만 확인했다. KV 바인딩·메일 발송은
    `SETUP.md`대로 대시보드에서 켜야 동작한다.
-5. **동시에 밀면 한쪽이 덮일 수 있다.** KV에 조건부 쓰기가 없어서다.
+6. **동시에 밀면 한쪽이 덮일 수 있다.** KV에 조건부 쓰기가 없어서다.
    다음 차례에 스스로 회복되지만, 근본 해결은 Durable Objects (spec §11).
 
 ### 해소됨 (2026-08-19)
