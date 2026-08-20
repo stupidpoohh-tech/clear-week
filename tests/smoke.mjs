@@ -27,7 +27,7 @@ const TYPES = { '.html': 'text/html', '.png': 'image/png', '.webmanifest': 'appl
 
 /* ── 모의 서버 — Pages Functions 자리를 대신한다 ─────────────
    KV·메일은 흉내만 낸다. 합치기와 주고받는 모양은 진짜와 같다. */
-const api = { weeks: {}, sessions: new Map(), codes: new Map(), lastCode: null };
+const api = { weeks: {}, sessions: new Map(), codes: new Map(), lastCode: null, resetAt: 0 };
 const readBody = req => new Promise(r => {
   let b = ''; req.on('data', c => (b += c)); req.on('end', () => { try { r(JSON.parse(b || '{}')); } catch { r({}); } });
 });
@@ -71,18 +71,30 @@ async function handleApi(req, res, url) {
 
   if (!email) return send(res, 401, { error: 'unauthorized' });
 
+  if (url === '/api/reset') {
+    api.weeks = {};
+    api.resetAt = Date.now();
+    return send(res, 200, { ok: true, resetAt: api.resetAt });
+  }
+
   if (url === '/api/sync') {
     const b = await readBody(req);
     const id = String(b.weekId || '');
+    if (api.resetAt > 0 && (Number(b.resetAt) || 0) < api.resetAt) {
+      return send(res, 200, { week: api.weeks[id] || blankWeek(id), resetAt: api.resetAt, dropped: true });
+    }
     const merged = mergeWeek(sanitizeWeek(b.week, id),
       api.weeks[id] ? sanitizeWeek(api.weeks[id], id) : blankWeek(id));
     api.weeks[id] = merged;
-    return send(res, 200, { week: merged });
+    return send(res, 200, { week: merged, resetAt: api.resetAt });
   }
 
   if (url === '/api/sync/all') {
+    /* GET은 보기만 한다 — 합치지도 쓰지도 않는다 */
+    if (req.method === 'GET') return send(res, 200, { weeks: api.weeks, resetAt: api.resetAt });
     const b = await readBody(req);
-    const incoming = b.weeks || {};
+    const stale = api.resetAt > 0 && (Number(b.resetAt) || 0) < api.resetAt;
+    const incoming = stale ? {} : (b.weeks || {});
     const ids = new Set([...Object.keys(api.weeks), ...Object.keys(incoming)]);
     const weeks = {};
     for (const id of ids) {
@@ -91,7 +103,7 @@ async function handleApi(req, res, url) {
       api.weeks[id] = merged;
       weeks[id] = merged;
     }
-    return send(res, 200, { weeks });
+    return send(res, 200, { weeks, resetAt: api.resetAt, dropped: stale });
   }
   return send(res, 404, { error: 'not-found' });
 }
@@ -350,6 +362,9 @@ check('항목을 줄이면 표시가 사라짐', await markOf('tue'), null);
 
 console.log('\n── 백업 ──');
 check('평소엔 계정 화면이 닫혀 있다', await page.locator('#account').isVisible(), false);
+check('hidden을 건 것은 예외 없이 숨는다', await page.evaluate(() =>
+  Array.from(document.querySelectorAll('[hidden]'))
+    .every(el => getComputedStyle(el).display === 'none')), true);
 check('머리말에 계정으로 들어가는 문이 있다', await page.locator('#acctBtn').isVisible(), true);
 await page.locator('#acctBtn').click();
 await page.waitForTimeout(250);
@@ -514,7 +529,7 @@ async function login(pg, mail) {
   await openDrawer(pg);
   await pg.locator('#loginBtn').click();
   await pg.locator('#loginEmail').fill(mail);
-  await pg.locator('#authGo').click();
+  await pg.locator('#sendCode').click();
   await pg.waitForTimeout(250);
   await pg.locator('#loginCode').fill(api.lastCode);
   await pg.locator('#authGo').click();
@@ -526,6 +541,36 @@ await login(page, 'me@example.com');
 check('로그인하면 주소가 잡힌다', await page.evaluate(() => Sync.email), 'me@example.com');
 check('로그인하면 사람 표시가 진해진다', await page.evaluate(() =>
   document.getElementById('acctBtn').classList.contains('on')), true);
+
+/* 코드는 기기가 아니라 메일 주소에 묶인다 — 받은 코드를 다른 기기에 넣어도 된다 */
+{
+  const other = await (await browser.newContext({ viewport: { width: 390, height: 760 } })).newPage();
+  await other.goto(`http://127.0.0.1:${PORT}/index.html`);
+  await other.waitForTimeout(400);
+  await other.evaluate(() => { markGuideSeen(); });
+  await other.reload(); await other.waitForTimeout(500);
+  await other.locator('#acctBtn').click();
+  await other.waitForTimeout(200);
+  await other.locator('#loginBtn').click();
+  await other.locator('#loginEmail').fill('me@example.com');
+  check('코드 칸은 코드 받기를 누르지 않아도 열려 있다',
+    await other.locator('#loginCode').isVisible(), true);
+  /* 이 기기에서 코드를 받지 않고, 다른 기기가 받아 둔 코드를 그대로 넣는다 */
+  await other.locator('#sendCode').click();
+  await other.waitForTimeout(250);
+  const codeFromElsewhere = api.lastCode;
+  await other.reload(); await other.waitForTimeout(500);
+  await other.locator('#acctBtn').click();
+  await other.waitForTimeout(200);
+  await other.locator('#loginBtn').click();
+  await other.locator('#loginEmail').fill('me@example.com');
+  await other.locator('#loginCode').fill(codeFromElsewhere);
+  await other.locator('#authGo').click();
+  await other.waitForFunction(() => Sync.email !== null, null, { timeout: 5000 });
+  check('다른 기기가 받은 코드로 로그인된다',
+    await other.evaluate(() => Sync.email), 'me@example.com');
+  await other.close();
+}
 
 /* PC에서 적은 것이 서버로 올라간다 */
 await page.locator('#acctClose').click();      // 계정 화면 닫기
@@ -590,6 +635,83 @@ check('로그아웃하면 사람 표시도 옅어진다', await page.evaluate(()
 await phone.close();
 await page.locator('#acctClose').click();
 await page.waitForTimeout(200);
+
+console.log('\n── 처음 이을 때 · 전부 비우기 ──');
+/* 앞 절이 서버에 남긴 것을 치우고 빈 서버에서 시작한다 */
+api.weeks = {}; api.resetAt = 0;
+/* 양쪽에 다 기록이 있으면 합치기 전에 물어본다 */
+const fresh = async (mail, seedText) => {
+  const pg = await (await browser.newContext({ viewport: { width: 390, height: 760 } })).newPage();
+  await pg.goto(`http://127.0.0.1:${PORT}/index.html`);
+  await pg.waitForTimeout(400);
+  await pg.evaluate(() => { markGuideSeen(); });
+  await pg.reload(); await pg.waitForTimeout(500);
+  if (seedText) {
+    await pg.evaluate(txt => {
+      const now = Date.now();
+      App.week.days.mon.push({ id: txt, text: txt, struck: false,
+        createdAt: now, updatedAt: now, strikes: [] });
+      App.save();
+    }, seedText);
+    await pg.waitForTimeout(200);
+  }
+  return pg;
+};
+const startLogin = async (pg, mail) => {
+  await pg.locator('#acctBtn').click();
+  await pg.waitForTimeout(200);
+  await pg.locator('#loginBtn').click();
+  await pg.locator('#loginEmail').fill(mail);
+  await pg.locator('#sendCode').click();
+  await pg.waitForTimeout(250);
+  await pg.locator('#loginCode').fill(api.lastCode);
+  await pg.locator('#authGo').click();
+  await pg.waitForTimeout(700);
+};
+
+const devA = await fresh('me@example.com', 'A가 적은 것');
+await startLogin(devA, 'me@example.com');
+check('서버가 비어 있으면 묻지 않는다', await devA.locator('#linkRow').isVisible(), false);
+await devA.waitForTimeout(400);
+
+const devB = await fresh('me@example.com', 'B가 적은 것');
+await startLogin(devB, 'me@example.com');
+check('양쪽에 다 있으면 물어본다', await devB.locator('#linkRow').isVisible(), true);
+check('묻는 동안에는 아직 합치지 않는다',
+  await devB.evaluate(() => App.week.days.mon.map(i => i.text)), ['B가 적은 것']);
+
+await devB.locator('#linkMine').click();
+await devB.waitForTimeout(900);
+check('이 기기 것으로 — 내 것만 남는다',
+  await devB.evaluate(() => App.week.days.mon.map(i => i.text)), ['B가 적은 것']);
+check('이 기기 것으로 — 서버도 그렇게 바뀐다',
+  Object.values(api.weeks).flatMap(w => w.days.mon.map(i => i.text)), ['B가 적은 것']);
+
+await devA.evaluate(() => Sync.push());
+await devA.waitForTimeout(600);
+check('비운 뒤 다른 기기가 옛것을 되살리지 못한다',
+  await devA.evaluate(() => App.week.days.mon.map(i => i.text)), ['B가 적은 것']);
+
+/* 전부 비우기 — 두 번 눌러야 한다 */
+await devB.locator('#wipeBtn').click();
+await devB.waitForTimeout(200);
+check('한 번 누르면 확인만 한다', await devB.evaluate(() =>
+  document.getElementById('wipeBtn').textContent), '정말 비웁니다');
+check('아직 지워지지 않았다', Object.keys(api.weeks).length > 0, true);
+await devB.locator('#wipeBtn').click();
+await devB.waitForTimeout(700);
+check('두 번째에 서버가 비워진다', Object.keys(api.weeks).length, 0);
+check('이 기기도 비워진다',
+  await devB.evaluate(() => App.week.days.mon.length), 0);
+
+await devA.evaluate(() => Sync.push());
+await devA.waitForTimeout(600);
+check('다른 기기도 다음 차례에 비워진다',
+  await devA.evaluate(() => App.week.days.mon.length), 0);
+check('비운 뒤에도 서버가 다시 차지 않는다', Object.keys(api.weeks).length, 0);
+await devA.close();
+await devB.close();
+api.resetAt = 0;
 
 console.log('\n── 확대 차단 ──');
 check('확대 제스처 preventDefault', await page.evaluate(() =>

@@ -85,6 +85,12 @@ export function allowedEmail(env, email) {
   return list.includes(email);
 }
 
+/* 전부 비운 시각. 이보다 오래된 기기가 밀어 올리는 것은 받지 않는다 —
+   받으면 방금 비운 것이 그 기기에서 되살아난다. */
+export async function readResetAt(env, email) {
+  return ts(Number(await env.CLEARWEEK.get('reset:' + email)));
+}
+
 /* ── 주 데이터 ─────────────────────────────────────────────── */
 
 export function blankWeek(weekId) {

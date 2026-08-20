@@ -40,6 +40,10 @@
     --free-width: clamp(84px, 27%, 132px);
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
+  /* 저자 스타일은 특정도와 무관하게 브라우저 기본을 이긴다. 그래서 display를 준
+     요소에 hidden을 걸어도 안 숨는다 — .item · .backup · .account .row 에서 세 번 밟았다.
+     한 줄로 원천 차단한다. 숨기려면 hidden 하나면 되게. */
+  [hidden] { display: none !important; }
   html { height: 100%; background: var(--paper); touch-action: none; }
   body {
     position: fixed; inset: 0; overflow: hidden;   /* 페이지 스크롤 없음 */
@@ -107,7 +111,6 @@
   /* 백업 — 제목을 꾹 누르면 열리는 한 줄. 설정 화면은 두지 않는다 */
   /* ── 내 계정 — 로그인이 생겼으니 계정을 두는 자리도 생겼다.
      주간 화면 위에 덮는 한 장. 평소에는 없는 것과 같다. */
-  .account[hidden] { display: none; }
   .account {
     position: fixed; inset: 0; z-index: 12;
     display: flex; align-items: center; justify-content: center;
@@ -256,7 +259,6 @@
   }
 
   /* ── 항목 ────────────────────────────────────────────────── */
-  .item[hidden] { display: none; }   /* 클래스가 [hidden]을 이기지 않게 */
   .item {
     position: relative;
     min-height: calc(var(--item-height) * var(--fs));
@@ -294,7 +296,6 @@
 
   /* ── 첫 실행 안내 — 표본 주 위에 설명을 얹는다 ──────────────
      화면을 가리지 않는다. 실제로 쓰이는 자리 옆에 한 마디씩 붙는다. */
-  .guide[hidden] { display: none; }     /* 클래스가 [hidden]을 이기지 않게 */
   .guide { position: fixed; inset: 0; z-index: 10; touch-action: none; }
   /* 종이 위에 덧댄 반투명 한 장. 가장자리가 종이 밖으로 살짝 걸치고
      오른쪽 아래 모서리가 접혀 있다 — 잡아서 치우면 된다는 표시. */
@@ -392,9 +393,15 @@
         <button id="logoutBtn" type="button" hidden>로그아웃</button>
         <input id="loginEmail" class="auth-input" type="email" inputmode="email"
                autocomplete="email" placeholder="메일 주소" hidden>
+        <button id="sendCode" type="button" hidden>코드 받기</button>
+      </span>
+    </div>
+    <div class="row" id="codeRow" hidden>
+      <span class="k">코드</span>
+      <span class="v">
         <input id="loginCode" class="auth-input code" type="text" inputmode="numeric"
-               autocomplete="one-time-code" maxlength="6" placeholder="여섯 자리" hidden>
-        <button id="authGo" type="button" hidden>보내기</button>
+               autocomplete="one-time-code" maxlength="6" placeholder="여섯 자리">
+        <button id="authGo" type="button">확인</button>
       </span>
     </div>
     <div class="row">
@@ -404,9 +411,21 @@
         <button id="importBtn" type="button">가져오기</button>
       </span>
     </div>
+    <div class="row" id="linkRow" hidden>
+      <span class="k">첫 연결</span>
+      <span class="v">
+        <button id="linkMerge" type="button">합치기</button>
+        <button id="linkMine" type="button">이 기기 것으로</button>
+        <button id="linkTheirs" type="button">서버 것으로</button>
+      </span>
+    </div>
     <div class="row">
       <span class="k">안내</span>
       <span class="v"><button id="guideBtn" type="button">쓰는 법 다시 보기</button></span>
+    </div>
+    <div class="row" id="wipeRow" hidden>
+      <span class="k">비우기</span>
+      <span class="v"><button id="wipeBtn" type="button">전부 비우기</button></span>
     </div>
     <p class="msg" id="backupMsg"></p>
 
@@ -749,6 +768,14 @@ function saveWeek(week) {
 /* 안내를 다시 안 보기로 했는지. 주 데이터가 아니므로 백업에 담기지 않는다
    (백업은 `clearweek:YYYY-Www` 꼴 키만 모은다). */
 const GUIDE_KEY = STORE_PREFIX + 'guide-seen';
+/* 전부 비운 시각. 서버가 더 최근이면 이 기기도 비운다 */
+const RESET_KEY = STORE_PREFIX + 'reset-at';
+function localResetAt() {
+  try { return Number(localStorage.getItem(RESET_KEY)) || 0; } catch (e) { return 0; }
+}
+function setLocalResetAt(v) {
+  try { localStorage.setItem(RESET_KEY, String(v)); } catch (e) { Store.fail(); }
+}
 
 function guideSeen() {
   try { return localStorage.getItem(GUIDE_KEY) === '1'; }
@@ -959,8 +986,11 @@ const Sync = {
       if (!week) return;
       const out = await this.call('/api/sync', {
         method: 'POST',
-        body: JSON.stringify({ weekId: week.weekId, week }),
+        body: JSON.stringify({ weekId: week.weekId, week, resetAt: localResetAt() }),
       });
+      /* 비워진 것을 여기서 알게 될 수 있다 — 내 사본을 지우고,
+         서버가 돌려준 것을 그대로 받는다. 그것이 새 출발점이다. */
+      this.host.applyReset(out.resetAt);
       if (out.week) this.host.adopt(out.week);
       this.mark('');
     } catch (e) {
@@ -977,9 +1007,23 @@ const Sync = {
     if (!this.email || !this.host) return;
     const out = await this.call('/api/sync/all', {
       method: 'POST',
-      body: JSON.stringify({ weeks: this.host.allWeeks() }),
+      body: JSON.stringify({ weeks: this.host.allWeeks(), resetAt: localResetAt() }),
     });
+    this.host.applyReset(out.resetAt);
     this.host.adoptAll(out.weeks || {});
+  },
+
+  /* 서버에 무엇이 있는지 보기만 한다 — 합치기 전에 물어보려면 필요하다 */
+  peek() { return this.call('/api/sync/all', { method: 'GET' }); },
+
+  /* 서버를 비우고 그 시각을 남긴다. 다른 기기는 다음 차례에 그 시각을 보고 비운다.
+     keepLocal이면 이 기기 것은 남긴다 — "이 기기 것으로 맞추기"가 그 경우다.
+     남긴 뒤 곧바로 올리면 그것이 새 출발점이 된다. */
+  async wipe(keepLocal) {
+    const out = await this.call('/api/reset', { method: 'POST' });
+    if (keepLocal) setLocalResetAt(out.resetAt);
+    else this.host.applyReset(out.resetAt, true);
+    return out;
   },
 
   schedule() {
@@ -1641,6 +1685,31 @@ const App = {
     return out;
   },
 
+  /* 서버가 비워진 것을 알게 되면 이 기기도 비운다.
+     force면 내가 비운 것이므로 무조건 지운다. 반환값: 비웠는지 여부 */
+  applyReset(serverResetAt, force) {
+    const at = Number(serverResetAt) || 0;
+    if (!at || (!force && at <= localResetAt())) return false;
+    this.clearLocalWeeks();
+    setLocalResetAt(at);
+    return true;
+  },
+
+  /* 이 기기의 주만 지운다. 비운 시각은 건드리지 않는다 —
+     "서버 것으로 맞추기"는 서버를 비우는 것이 아니라 내 것을 버리는 것이다. */
+  clearLocalWeeks() {
+    try {
+      const doomed = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.indexOf(STORE_PREFIX) === 0 &&
+            WEEK_ID_RE.test(k.slice(STORE_PREFIX.length))) doomed.push(k);
+      }
+      doomed.forEach(k => localStorage.removeItem(k));
+    } catch (e) { Store.fail(); }
+    if (!this.guideOn) { this.week = loadWeek(this.week.weekId); this.render(); }
+  },
+
   adoptAll(weeks) {
     Object.keys(weeks).forEach(id => {
       if (!WEEK_ID_RE.test(id)) return;
@@ -1906,8 +1975,8 @@ const App = {
     Sync.onChange = msg => this.renderAuth(msg);
 
     el('loginBtn').addEventListener('click', () => {
-      this.authStep = 'email';
-      this.renderAuth('');
+      this.authStep = 'login';
+      this.renderAuth();
       el('loginEmail').focus();
     });
 
@@ -1920,71 +1989,143 @@ const App = {
       this.renderAuth('로그아웃했습니다 · 이 기기의 기록은 그대로 있습니다');
     });
 
-    el('authGo').addEventListener('click', () => this.authGo());
-    [el('loginEmail'), el('loginCode')].forEach(input => {
-      input.addEventListener('keydown', e => {
-        if (e.key === 'Enter') { e.preventDefault(); this.authGo(); }
-      });
+    el('sendCode').addEventListener('click', () => this.sendCode());
+    el('authGo').addEventListener('click', () => this.verifyCode());
+    el('loginEmail').addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); this.sendCode(); }
     });
+    el('loginCode').addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); this.verifyCode(); }
+    });
+    this.bindLink();
     this.renderAuth();
   },
 
-  async authGo() {
-    const el = id => document.getElementById(id);
+  async sendCode() {
     if (this.authBusy) return;
     this.authBusy = true;
+    const email = document.getElementById('loginEmail').value.trim();
     try {
-      if (this.authStep === 'email') {
-        const email = el('loginEmail').value.trim();
-        this.renderAuth('보내는 중…');
-        await Sync.call('/api/auth/request', { method: 'POST', body: JSON.stringify({ email }) });
-        this.authEmail = email;
-        this.authStep = 'code';
-        this.renderAuth('메일로 여섯 자리를 보냈습니다');
-        el('loginCode').value = '';
-        el('loginCode').focus();
-        return;
-      }
-      const code = el('loginCode').value.trim();
+      this.renderAuth('보내는 중…');
+      await Sync.call('/api/auth/request', { method: 'POST', body: JSON.stringify({ email }) });
+      this.renderAuth('메일로 여섯 자리를 보냈습니다');
+      document.getElementById('loginCode').focus();
+    } catch (e) {
+      this.renderAuth(AUTH_ERRORS[e.code] || '안 됐습니다 · 잠시 뒤에 다시');
+    } finally { this.authBusy = false; }
+  },
+
+  /* 코드는 기기가 아니라 메일 주소에 묶여 있다 — 어느 기기에서 받았든
+     아무 기기에나 넣으면 된다. 그래서 코드 칸은 늘 열려 있다. */
+  async verifyCode() {
+    if (this.authBusy) return;
+    this.authBusy = true;
+    const email = document.getElementById('loginEmail').value.trim();
+    const code = document.getElementById('loginCode').value.trim();
+    try {
       this.renderAuth('확인 중…');
       const out = await Sync.call('/api/auth/verify', {
-        method: 'POST', body: JSON.stringify({ email: this.authEmail, code }),
+        method: 'POST', body: JSON.stringify({ email, code }),
       });
       Sync.email = out.email;
       this.authStep = null;
       this.renderAuth('맞추는 중…');
-      await Sync.syncAll();
+      await this.firstLink();
       Sync.begin();
-      this.renderAuth();
     } catch (e) {
       this.renderAuth(AUTH_ERRORS[e.code] || '안 됐습니다 · 잠시 뒤에 다시');
-    } finally {
-      this.authBusy = false;
+    } finally { this.authBusy = false; }
+  },
+
+  /* 기기를 처음 이을 때 — 양쪽에 다 기록이 있으면 합치기 전에 물어본다.
+     한쪽만 있으면 물을 것이 없다. 그냥 맞춘다. */
+  async firstLink() {
+    const mine = Object.keys(this.allWeeks()).length;
+    let theirs = 0;
+    try {
+      const peek = await Sync.peek();
+      if (this.applyReset(peek.resetAt)) return;      // 그 사이 비워졌다면 그것부터
+      theirs = Object.keys(peek.weeks || {}).length;
+    } catch (e) { /* 못 보면 그냥 합친다 */ }
+
+    if (mine && theirs) {
+      document.getElementById('linkRow').hidden = false;
+      this.renderAuth('이 기기에 ' + mine + '주, 서버에 ' + theirs + '주가 있습니다 · 어떻게 할까요');
+      return;
     }
+    await Sync.syncAll();
+    this.renderAuth();
+  },
+
+  bindLink() {
+    const done = async (msg, before) => {
+      document.getElementById('linkRow').hidden = true;
+      this.renderAuth(msg);
+      try {
+        if (before) await before();
+        await Sync.syncAll();
+        Sync.begin();
+        this.renderAuth();
+      } catch (e) { this.renderAuth('안 됐습니다 · 잠시 뒤에 다시'); }
+    };
+    document.getElementById('linkMerge').addEventListener('click',
+      () => done('합치는 중…'));
+    /* 서버를 비우되 이 기기 것은 남긴다 — 곧바로 올려 새 출발점으로 삼는다 */
+    document.getElementById('linkMine').addEventListener('click',
+      () => done('이 기기 것으로 맞추는 중…', () => Sync.wipe(true)));
+    /* 서버는 그대로 두고 내 것을 버린다 — 올릴 것이 없으면 서버 것만 내려온다 */
+    document.getElementById('linkTheirs').addEventListener('click',
+      () => done('서버 것으로 맞추는 중…', async () => this.clearLocalWeeks()));
+
+    /* 전부 비우기 — 되돌릴 수 없으므로 두 번 눌러야 한다 */
+    const wipeBtn = document.getElementById('wipeBtn');
+    wipeBtn.addEventListener('click', async () => {
+      if (!this.wipeArmed) {
+        this.wipeArmed = true;
+        wipeBtn.textContent = '정말 비웁니다';
+        this.renderAuth('한 번 더 누르면 서버와 모든 기기의 기록이 지워집니다 · 되돌릴 수 없습니다');
+        clearTimeout(this.wipeTimer);
+        this.wipeTimer = setTimeout(() => {
+          this.wipeArmed = false;
+          wipeBtn.textContent = '전부 비우기';
+          this.renderAuth();
+        }, 5000);
+        return;
+      }
+      clearTimeout(this.wipeTimer);
+      this.wipeArmed = false;
+      wipeBtn.textContent = '전부 비우기';
+      this.renderAuth('비우는 중…');
+      try {
+        await Sync.wipe(false);
+        this.renderAuth('전부 비웠습니다 · 다른 기기도 열면 비워집니다');
+      } catch (e) {
+        this.renderAuth('비우지 못했습니다 · 잠시 뒤에 다시');
+      }
+    });
   },
 
   renderAuth(msg) {
     const el = id => document.getElementById(id);
-    const step = this.authStep;
-    /* 서버가 없으면 로그인 버튼을 내보이지 않는다 — 눌러도 안 되는 것을
-       내놓지 않는다. 서버 없이도 앱은 완전히 동작한다. */
+    const on = this.authStep === 'login';
     /* 서버가 없으면 계정 줄 자체를 내보이지 않는다 — 라벨만 남아 빈 줄이 되지 않게 */
-    document.getElementById('authRow').hidden = !Sync.ready && !Sync.email;
-    el('loginBtn').hidden = !Sync.ready || !!Sync.email || !!step;
+    el('authRow').hidden = !Sync.ready && !Sync.email;
+    el('loginBtn').hidden = !Sync.ready || !!Sync.email || on;
     el('logoutBtn').hidden = !Sync.email;
-    el('loginEmail').hidden = step !== 'email';
-    el('loginCode').hidden = step !== 'code';
-    el('authGo').hidden = !step;
-    el('authGo').textContent = step === 'code' ? '확인' : '코드 받기';
+    el('loginEmail').hidden = !on;
+    el('sendCode').hidden = !on;
+    el('codeRow').hidden = !on;
+    el('wipeRow').hidden = !Sync.email || on;
+    if (!Sync.email) { el('linkRow').hidden = true; this.wipeArmed = false; }
+    if (!this.wipeArmed) el('wipeBtn').textContent = '전부 비우기';
     /* 머리말의 사람 표시도 같이 바뀐다 */
-    document.getElementById('acctBtn').classList.toggle('on', !!Sync.email);
+    el('acctBtn').classList.toggle('on', !!Sync.email);
     el('authMsg').textContent = msg || (Sync.email
       ? Sync.email + ' · 자동으로 맞춰집니다'
-      : '이 기기에만 저장됩니다');
+      : on ? '메일로 받은 여섯 자리를 넣으세요 · 없으면 코드 받기'
+           : '이 기기에만 저장됩니다');
   },
 
-  /* 표본 주로 바꿔 그린 뒤 그 위에 설명을 얹는다. 닫으면 원래 주로 돌아온다.
-     표본은 저장하지 않는다 — save()가 guideOn 동안 아무것도 하지 않는다. */
   openGuide() {
     if (this.guideOn) return;
     this.guideOn = true;
