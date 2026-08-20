@@ -12,6 +12,8 @@ import { readFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 /* 합치기는 서버에만 있다. 모의 서버도 같은 함수를 쓴다 — 규칙이 갈라지지 않게 */
 import { mergeWeek, sanitizeWeek, blankWeek } from '../functions/_lib.js';
+/* 행동로그도 마찬가지 — 문지기는 서버에만 있다 */
+import { sanitizeBatch } from '../functions/_log.js';
 
 /* playwright는 전역 설치본도 허용한다 (PLAYWRIGHT_MODULE로 경로 지정 가능) */
 const chromium = await (async () => {
@@ -27,7 +29,8 @@ const TYPES = { '.html': 'text/html', '.png': 'image/png', '.webmanifest': 'appl
 
 /* ── 모의 서버 — Pages Functions 자리를 대신한다 ─────────────
    KV·메일은 흉내만 낸다. 합치기와 주고받는 모양은 진짜와 같다. */
-const api = { weeks: {}, sessions: new Map(), codes: new Map(), lastCode: null, resetAt: 0 };
+const api = { weeks: {}, sessions: new Map(), codes: new Map(), lastCode: null, resetAt: 0,
+              log: [], logRaw: [], logOff: false };
 const readBody = req => new Promise(r => {
   let b = ''; req.on('data', c => (b += c)); req.on('end', () => { try { r(JSON.parse(b || '{}')); } catch { r({}); } });
 });
@@ -44,6 +47,15 @@ async function handleApi(req, res, url) {
   const email = api.sessions.get(cookieOf(req)) || null;
 
   if (url === '/api/me') return send(res, 200, { email, ready: true });
+
+  /* 행동로그 — 진짜와 같이 언제나 204. 받은 것은 검사에서 들여다본다 */
+  if (url === '/api/log') {
+    if (api.logOff) { res.writeHead(404); return res.end(); }
+    const b = await readBody(req);
+    api.logRaw.push(b);                        // 클라이언트가 실제로 보낸 것
+    api.log.push(...sanitizeBatch(b));         // 문지기를 통과한 것
+    res.writeHead(204); return res.end();
+  }
 
   if (url === '/api/auth/request') {
     const { email: to } = await readBody(req);
@@ -969,6 +981,122 @@ check('타자 소리와 깨우기가 있다', await page.evaluate(() =>
   check(`톡이 사각사각에 묻히지 않는다 (${gap.toFixed(1)} dB)`, gap > -8 && gap < 0, true);
   check('두 소리가 다치지 않는다 (잘림 없음)', await page.evaluate(() =>
     SOUND.volume * 1 < 1 && SOUND.keyVolume * 0.45 < 1), true);
+}
+
+console.log('\n── 방문자 행동로그 ──');
+/* 이 로그가 지켜야 할 선은 하나다: 적은 글자는 나가지 않는다.
+   서버의 문지기(`_log.js`)는 tests/log.mjs가 따로 검사한다.
+   여기서는 **클라이언트가 애초에 무엇을 보내는지**를 본다 — 문지기에 기대지 않는다. */
+{
+  const SECRET = '치과예약비밀번호1234';       // 이 글자가 로그에 나오면 실패다
+
+  /* 여기 오기까지 쌓인 것을 먼저 다 비운다. 한 번에 40개씩만 나가므로
+     비우지 않으면 이 절에서 만든 이벤트가 다음 묶음으로 밀린다. */
+  await page.evaluate(() => { while (Log.q.length) Log.flush(); });
+  await page.waitForTimeout(300);
+  check('앱을 연 것이 남는다', api.log.some(e => e.ev === 'open'), true);
+  api.log.length = 0; api.logRaw.length = 0;
+
+  /* 앞 절들이 thu에 남긴 것을 치운다. 이미 그어진 항목이 첫 줄에 있으면
+     그 위의 드래그는 긋기가 아니라 지우개가 된다 — 재던 것이 달라진다. */
+  await page.evaluate(() => { App.week.days.thu = []; App.save(); App.render(); });
+  await page.waitForTimeout(200);
+  await tapLabel(3);
+  await type([SECRET, '두번째']);
+  await strikeFirst('thu');
+  await page.evaluate(() => { while (Log.q.length) Log.flush(); });
+  await page.waitForTimeout(300);
+
+  const names = api.log.map(e => e.ev);
+  check('적은 것·그은 것이 로그에 남는다',
+    ['add', 'strike'].every(n => names.includes(n)), true);
+
+  /* 가장 중요한 검사 */
+  const raw = JSON.stringify(api.logRaw);
+  check('적은 글자가 나가지 않는다', raw.includes(SECRET) || raw.includes('치과'), false);
+  check('두 번째 항목 글자도 나가지 않는다', raw.includes('두번째'), false);
+
+  /* 문지기에 기대지 않고, 클라이언트가 보내는 자리 자체를 못박는다.
+     새 필드를 늘리려면 이 목록과 `_log.js`를 같이 고쳐야 한다. */
+  const allowed = ['ev', 'd', 'did', 'sid', 'n1', 'n2', 'w', 'h', 'signed'];
+  const strayKeys = new Set();
+  for (const batch of api.logRaw)
+    for (const e of (batch.events || []))
+      Object.keys(e).forEach(k => { if (!allowed.includes(k)) strayKeys.add(k); });
+  check('약속한 자리 밖으로는 아무것도 안 보낸다', [...strayKeys], []);
+
+  /* 글자 대신 길이만 — 길이는 내용이 아니다 */
+  const add1 = api.log.find(e => e.ev === 'add' && e.n1 === SECRET.length);
+  check('글자 대신 길이만 담긴다', !!add1, true);
+  check('어느 칸인지는 day/free로만 담긴다', add1 && add1.d, 'day');
+
+  const did = await page.evaluate(() => Log.did);
+  const sid = await page.evaluate(() => Log.sid);
+  check('기기 ID는 무작위 열여섯 자', /^[a-z0-9]{16}$/.test(did), true);
+  check('기기 ID에 메일 주소가 섞이지 않는다', did.includes('@'), false);
+
+  /* 다시 열면 — 기기는 그대로, 방문은 새로 */
+  await page.reload();
+  await page.waitForTimeout(400);
+  check('기기 ID는 다시 열어도 그대로', await page.evaluate(() => Log.did), did);
+  check('세션 ID는 열 때마다 새로 난다',
+    (await page.evaluate(() => Log.sid)) === sid, false);
+
+  /* 서버가 없어도 앱은 완전히 동작해야 한다 (spec §13).
+     받을 자리가 없으면 한 번 두드려 보고 스스로 그만둔다. */
+  api.logOff = true;
+  await tapLabel(4);
+  await type(['서버 없이도 적힌다']);
+  await page.evaluate(() => Log.flush());
+  await page.waitForTimeout(500);
+  check('로그가 404여도 적히는 데 지장이 없다',
+    await days('fri'), ['서버 없이도 적힌다']);
+  check('받을 자리가 없으면 스스로 그만둔다', await page.evaluate(() => Log.off), true);
+  check('그만둔 뒤에는 모아 두지도 않는다', await page.evaluate(() => {
+    for (let i = 0; i < 50; i++) Log.ev('today');
+    return Log.q.length;
+  }), 0);
+  api.logRaw.length = 0;
+  await page.evaluate(() => Log.flush());
+  await page.waitForTimeout(300);
+  check('그만둔 뒤에는 더 두드리지 않는다', api.logRaw.length, 0);
+  /* 404는 브라우저가 남기는 자원 로드 기록이지 앱의 오류가 아니다.
+     일부러 없는 곳을 두드려 본 절이므로 여기서만 걷어낸다. */
+  for (let i = errors.length - 1; i >= 0; i--)
+    if (/404/.test(errors[i])) errors.splice(i, 1);
+  api.logOff = false;
+
+  /* 큐가 무한히 자라지 않는다 — 서버가 죽어 있어도 메모리는 안전하다 */
+  check('모아 두는 양에 한계가 있다', await page.evaluate(() => {
+    Log.off = false;                       // 방금 스스로 껐으므로 되살려서 본다
+    for (let i = 0; i < 500; i++) Log.ev('today');
+    const n = Log.q.length;
+    Log.q.length = 0;
+    return n <= LOG.maxQueue;
+  }), true);
+
+  await page.evaluate(() => { App.week.days.thu = []; App.week.days.fri = []; App.save(); App.render(); });
+  await page.waitForTimeout(200);
+}
+
+/* 추적을 거부해 둔 브라우저에는 한 줄도 보내지 않는다 */
+{
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 760 } });
+  await ctx.addInitScript(() => {
+    Object.defineProperty(navigator, 'doNotTrack', { get: () => '1' });
+  });
+  const dnt = await ctx.newPage();
+  await dnt.goto(`http://127.0.0.1:${PORT}/index.html`);
+  await dnt.evaluate(() => { markGuideSeen(); });
+  await dnt.reload();
+  await dnt.waitForTimeout(400);
+  api.logRaw.length = 0;
+  await dnt.evaluate(() => { Log.ev('today'); Log.flush(); });
+  await dnt.waitForTimeout(300);
+  check('추적 거부를 켜면 로그가 꺼진다', await dnt.evaluate(() => Log.off), true);
+  check('추적 거부를 켜면 한 줄도 안 보낸다', api.logRaw.length, 0);
+  check('그래도 앱은 그대로 쓸 수 있다', await dnt.evaluate(() => !!App.week), true);
+  await ctx.close();
 }
 
 console.log('\n── 확대 차단 ──');

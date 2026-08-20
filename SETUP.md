@@ -99,7 +99,72 @@ npx wrangler pages dev .
 `wrangler.toml`의 KV id를 채워야 한다. 비밀값은 `.dev.vars`에 둔다 (역시 커밋하지 않는다).
 **다 쓰면 `wrangler.toml`을 지운다** — 남겨 두고 푸시하면 대시보드가 잠긴다.
 
+## 5. 방문자 행동로그 켜기 (선택)
+
+**안 해도 앱은 완전히 동작한다.** 안 묶으면 서버가 조용히 버리고,
+앱은 한 번 두드려 본 뒤 스스로 그만둔다 (spec §14).
+
+### 5-1. 방문 통계 — 클릭 한 번, 코드 없음
+
+**Workers & Pages → clear-week → Settings → Web Analytics → Enable.**
+다음 배포 때 Cloudflare가 알아서 비컨을 넣는다. 저장소에서 고칠 것은 없다.
+쿠키를 쓰지 않고 사람을 따라다니지 않는다. 방문 수·유입·기기·나라까지 보여 준다.
+
+**여기서 커스텀 이벤트는 못 본다.** 쿠키도 클라이언트 상태도 없어서
+개별 행동을 따라갈 수 없다. 그래서 행동로그는 아래를 따로 켠다.
+
+### 5-2. 행동로그 — 데이터셋 묶기
+
+**Workers & Pages → clear-week → Settings → Bindings → Add → Analytics Engine.**
+
+| 칸 | 값 |
+|---|---|
+| Variable name | `CLEARWEEK_LOG` |
+| Dataset | `clearweek_log` |
+
+이름 둘 다 정확해야 한다. `CLEARWEEK_LOG`는 코드가 찾는 이름이고
+(`functions/api/log.js`), `clearweek_log`는 읽을 때 쓰는 표 이름이다
+(`tools/stats.mjs`). **묶은 뒤 다시 배포해야 적용된다.**
+
+데이터셋은 미리 만들지 않는다 — 첫 이벤트가 도착할 때 저절로 생긴다.
+
+### 5-3. 읽을 토큰 만들기
+
+**My Profile → API Tokens → Create Token → Create Custom Token.**
+
+| 칸 | 값 |
+|---|---|
+| Permissions | `Account` · `Account Analytics` · `Read` |
+| Account Resources | 이 계정 |
+
+계정 ID는 Workers & Pages 오른쪽 사이드바에 있다.
+
+```
+export CF_ACCOUNT_ID=…
+export CF_API_TOKEN=…
+node tools/stats.mjs                 # 최근 14일
+node tools/stats.mjs --days 30
+```
+
+**내 기기는 빼고 보는 게 좋다** — 안 그러면 통계가 자기 자신이다.
+앱을 연 브라우저 콘솔에서 `localStorage['clearweek:did']`를 찍어 두고:
+
+```
+export CW_LOG_EXCLUDE=기기ID1,기기ID2
+```
+
+### 5-4. 끄고 싶으면
+
+- **잠깐 끄기**: 대시보드에서 Bindings의 `CLEARWEEK_LOG`를 지운다. 앱은 그대로 돈다.
+- **아예 끄기**: `index.html`의 `LOG.enabled = false`.
+- 쓰는 사람이 브라우저에서 추적 거부(DNT·GPC)를 켜 두면 애초에 안 보낸다.
+
 ## 돈
 
 KV 무료 한도는 하루 읽기 10만·쓰기 1천이다. 한 사람이 두 기기로 쓰면
 하루 수백 번 수준이라 한참 남는다. Resend 무료 한도도 로그인 메일 몇 통에는 넉넉하다.
+
+Analytics Engine 무료 한도는 하루 쓰기 10만·읽기 1만이고 **90일까지 보관**한다.
+한 사람이 하루에 내는 이벤트가 수십 개 수준이라, 하루 수백 명이 와도 남는다.
+90일이 지난 것은 사라지므로, 오래 두고 볼 숫자가 있으면 그전에 따로 적어 둔다.
+Web Analytics는 한도가 따로 없다.

@@ -531,6 +531,20 @@ const SOUND = {
   keyMs: 26,             // 한 번 톡 하는 길이 (ms). 늘리면 톡이 아니라 쉭이 된다
 };
 
+/* ── 방문자 행동로그 ───────────────────────────────────────
+   무엇을 쓰고 무엇을 안 쓰는지 알려고 둔다. 화면에는 아무것도 안 나온다 —
+   §2가 막은 '통계'는 사용자에게 보여주는 달성률·연속기록이고, 이건 만든 사람이
+   보는 운영 기록이다 (spec §14).
+   **적은 글자는 보내지 않는다.** 무엇을 보낼 수 있는지는 서버의 `_log.js`가
+   화이트리스트로 못박는다 — 여기서 실수해도 그 문을 통과하지 못한다. */
+const LOG = {
+  enabled: true,
+  endpoint: '/api/log',
+  flushMs: 5000,         // 모았다가 이만큼마다 한 번 보낸다 (한 손짓에 한 번씩 보내지 않게)
+  maxQueue: 200,         // 서버가 죽어 있어도 메모리가 늘지 않게
+  respectDNT: true,      // 추적 거부를 켠 브라우저에는 보내지 않는다
+};
+
 /* ═══════════════════════════════════════════════════════════════
    2. 유틸
    ═══════════════════════════════════════════════════════════════ */
@@ -547,6 +561,13 @@ const easeOut = t => 1 - (1 - t) * (1 - t);
 const easeIn = t => t * t;
 let uidSeq = 0;
 const newSeed = () => (Math.random() * 2147483647) | 0;
+
+/* 기기·세션을 알아보는 값. 뜻이 없는 무작위 열여섯 자다 */
+function randomId() {
+  const a = new Uint8Array(8);
+  crypto.getRandomValues(a);
+  return Array.from(a, b => b.toString(16).padStart(2, '0')).join('');
+}
 
 function mulberry32(seed) {
   let a = seed >>> 0;
@@ -767,6 +788,7 @@ const Store = {
   fail() {
     if (this.blocked) return;
     this.blocked = true;
+    Log.ev('save_fail');
     if (this.onBlocked) this.onBlocked();
   },
   /* 시작할 때 한 번 — 적기도 전에 알 수 있다 */
@@ -1105,6 +1127,85 @@ const Sync = {
 };
 
 /* ═══════════════════════════════════════════════════════════════
+   3-1. 방문자 행동로그 — 모았다가 한 번에. 실패하면 조용히 버린다.
+        로그가 앱을 느리게 하거나 멈추게 하는 일은 없어야 한다.
+   ═══════════════════════════════════════════════════════════════ */
+const DID_KEY = STORE_PREFIX + 'did';
+
+const Log = {
+  q: [], did: '', sid: '', timer: null, off: true,
+
+  /* 기기 하나를 알아보는 무작위 값. 사람이 누구인지는 담기지 않고
+     이 기기 밖으로도 나가지 않는다 — '다시 왔는지'를 보려고 둔다.
+     저장이 막혀 있으면 이번 방문에만 쓰는 값으로 대신한다. */
+  deviceId() {
+    let v = null;
+    try { v = localStorage.getItem(DID_KEY); } catch (e) { /* 사생활 모드 */ }
+    if (v && /^[a-z0-9]{8,32}$/.test(v)) return v;
+    v = randomId();
+    try { localStorage.setItem(DID_KEY, v); } catch (e) { /* 이번 방문만 산다 */ }
+    return v;
+  },
+
+  start() {
+    if (!LOG.enabled) return;
+    /* 추적을 거부해 둔 브라우저에는 보내지 않는다. 끄고 싶으면 LOG.respectDNT */
+    if (LOG.respectDNT && (navigator.globalPrivacyControl === true ||
+        navigator.doNotTrack === '1' || window.doNotTrack === '1')) return;
+    this.off = false;
+    this.did = this.deviceId();
+    this.sid = randomId();                  // 이번에 연 것 하나를 묶는 값
+    const standalone = window.matchMedia('(display-mode: standalone)').matches ||
+                       navigator.standalone === true;
+    this.ev('open', standalone ? 'standalone' : 'browser');
+    this.timer = setInterval(() => this.flush(), LOG.flushMs);
+    /* 앱을 덮는 순간이 마지막 기회다 — 여기서 못 보내면 그 방문은 통째로 사라진다 */
+    addEventListener('pagehide', () => this.flush(true));
+    addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') this.flush(true);
+    });
+  },
+
+  /* d·n1·n2가 무엇인지는 이벤트마다 다르다. 서버 `_log.js`가 목록을 쥔다.
+     여기서 자유 문자열을 넣어도 거기서 버려진다 — 일부러 그렇게 두었다. */
+  ev(name, d, n1, n2) {
+    if (this.off || this.q.length >= LOG.maxQueue) return;
+    this.q.push({
+      ev: name, d: d || '', did: this.did, sid: this.sid,
+      n1: n1 || 0, n2: n2 || 0,
+      w: innerWidth, h: innerHeight,
+      signed: Sync.email ? 1 : 0,
+    });
+  },
+
+  flush(final) {
+    if (this.off || !this.q.length) return;
+    const events = this.q.splice(0, 40);
+    const body = JSON.stringify({ events });
+    try {
+      /* 화면을 떠나는 중에는 fetch가 잘린다. sendBeacon만 끝까지 간다 */
+      if (final && navigator.sendBeacon &&
+          navigator.sendBeacon(LOG.endpoint, new Blob([body], { type: 'application/json' }))) return;
+      fetch(LOG.endpoint, {
+        method: 'POST', body, keepalive: true,
+        headers: { 'content-type': 'application/json' },
+      }).then(r => { if (!r.ok) this.stop(); })   // 받을 곳이 없으면 그만둔다
+        .catch(() => {});                          // 못 보냈으면 버린다. 다시 시도하지 않는다
+    } catch (e) { /* 로그는 절대 앱을 멈추지 않는다 */ }
+  },
+
+  /* 서버에 로그를 받을 자리가 없으면(바인딩 안 함·함수 없음) 한 번 알고 그만둔다.
+     없는 곳을 계속 두드리면 콘솔만 빨개지고 얻는 것이 없다.
+     로그인 버튼이 서버 없을 때 아예 안 나타나는 것과 같은 태도다 (spec §13). */
+  stop() {
+    this.off = true;
+    this.q.length = 0;
+    clearInterval(this.timer);
+    this.timer = null;
+  },
+};
+
+/* ═══════════════════════════════════════════════════════════════
    4. 사각사각 소리 — 필터를 통과시킨 노이즈의 음량을 손 속도로 조절
    ═══════════════════════════════════════════════════════════════ */
 const Sound = {
@@ -1412,6 +1513,7 @@ class StrikeItem {
 
     if (p.mode === 'purge') {
       const doomed = Array.from(p.purge);
+      if (doomed.length > 1) Log.ev('del_sweep', '', doomed.length);
       doomed.forEach(it => it.el.classList.remove('purging'));
       doomed.forEach(it => it.host.remove(it));
       return;
@@ -1522,6 +1624,7 @@ class StrikeItem {
       seed: p.seed,
     };
     this.data.strikes.push(rec);
+    Log.ev('strike', '', Math.round((rec.b - rec.a) * 100), p.lineIndex);
     this.registerStroke(p.active, p.lineIndex, p.baseY, p.halfH, rec);
     this.status = 'idle';
     this.syncStruck();
@@ -1590,6 +1693,7 @@ class StrikeItem {
     });
 
     const total = STROKE.autoStrokeMs + STROKE.autoStagger * (made.length - 1);
+    Log.ev('strike2', '', made.length);
     Sound.init(); Sound.resume(); Sound.scratch(0.5);
     const t0 = performance.now();
     const step = now => {
@@ -1715,6 +1819,7 @@ class StrikeItem {
   }
 
   removeStroke(s) {
+    Log.ev('erase', '', s.rec ? Math.round((s.rec.b - s.rec.a) * 100) : 0);
     haptic(ERASE.hapticOnErase);
     const i = this.strokes.indexOf(s);
     if (i >= 0) this.strokes.splice(i, 1);
@@ -1742,11 +1847,17 @@ const App = {
   guideOn: false,
 
   init() {
+    /* 로그를 맨 먼저 켠다 — 바로 아래 probe()가 save_fail을 낼 수 있고,
+       그때 로그가 아직 꺼져 있으면 사생활 모드가 통계에서 통째로 빠진다 */
+    Log.start();
     Store.onBlocked = () => this.updateNote();
     Store.probe();                                 // 적기 전에 미리 알아낸다
     this.thisMonday = mondayOf(new Date());
     this.go(this.thisMonday);
-    document.getElementById('today').addEventListener('click', () => this.go(this.thisMonday));
+    document.getElementById('today').addEventListener('click', () => {
+      Log.ev('today', '', this.weekOffset());
+      this.go(this.thisMonday);
+    });
     document.getElementById('prev').addEventListener('click', () => this.shift(-7));
     document.getElementById('next').addEventListener('click', () => this.shift(7));
     this.bindBackup();
@@ -1794,10 +1905,19 @@ const App = {
   shift(days) {
     const d = new Date(this.monday);
     d.setDate(d.getDate() + days);
+    Log.ev('week', days < 0 ? 'prev' : 'next', this.weekOffset(d));
     this.go(d);
   },
 
+  /* 이번 주에서 몇 주 떨어져 있나. 지난 주를 정말 고쳐 쓰는지 이 값으로 본다 */
+  weekOffset(monday) {
+    const from = monday || this.monday;
+    if (!from || !this.thisMonday) return 0;
+    return Math.round((from - this.thisMonday) / 604800000);
+  },
+
   go(monday) {
+    this.logged = {};              // 칸 상태는 주마다 새로 센다
     this.monday = monday;
     this.week = loadWeek(isoWeekId(monday));
     this.render();
@@ -2039,7 +2159,9 @@ const App = {
     const cell = this.cells[key];
     if (!cell) return;
     const before = cell.listEl.style.columnCount;
-    this.fitColumns(key);
+    const cols = this.fitColumns(key);
+    /* 두 단 이상으로 나뉜 것만 알린다. 한 단은 보통이라 셀 가치가 없다 */
+    if (cols > 1) this.note1('split:' + key, () => Log.ev('split', '', cols, cell.items.length));
     if (cell.listEl.style.columnCount !== before) {
       cell.items.forEach(item => { item.clearStrokes(); item.restore(); });
     }
@@ -2047,6 +2169,14 @@ const App = {
   },
 
   relayoutAll() { Object.keys(this.cells).forEach(k => this.relayoutCell(k)); },
+
+  /* 같은 사실을 이 주에서 한 번만 적는다. 다시 그릴 때마다 울리면 수가 뜻을 잃는다 */
+  note1(key, fn) {
+    if (!this.logged) this.logged = {};
+    if (this.logged[key]) return;
+    this.logged[key] = 1;
+    fn();
+  },
 
   /* ── 넘친 항목 — 데이터엔 있는데 칸 밖이라 안 보이는 것들 ──
      한 주가 한 화면이라 칸 높이가 고정이고, 넘치면 잘린다.
@@ -2068,6 +2198,7 @@ const App = {
     const cell = this.cells[key];
     if (!cell) return;
     const n = this.hiddenCount(cell);
+    if (n) this.note1('over:' + key, () => Log.ev('overflow', '', n, cell.items.length));
     if (!n) {
       if (cell.mark) { cell.mark.remove(); cell.mark = null; }
       return;
@@ -2097,6 +2228,7 @@ const App = {
 
     document.getElementById('exportBtn').addEventListener('click', async () => {
       this.backupMsg('내보내는 중…');
+      Log.ev('backup', 'export');
       try { this.backupMsg(await exportBackup()); }
       catch (e) { this.backupMsg('내보내지 못함'); }
     });
@@ -2112,7 +2244,8 @@ const App = {
       const reader = new FileReader();
       reader.onload = () => {
         const r = importBackup(String(reader.result));
-        if (r.error) { this.backupMsg(r.error); return; }
+        if (r.error) { Log.ev('backup', 'import-fail'); this.backupMsg(r.error); return; }
+        Log.ev('backup', 'import', r.added, r.kept);
         this.go(this.monday);         // 지금 보는 주가 채워졌을 수 있다
         this.backupMsg(r.added + '개 주 가져옴' +
           (r.kept ? ' · ' + r.kept + '개는 이미 있어 그대로 둠' : ''));
@@ -2131,7 +2264,7 @@ const App = {
     const open = force === undefined ? panel.hidden : force;
     if (open === !panel.hidden) return;
     panel.hidden = !open;
-    if (open) { this.authStep = null; this.backupMsg(''); this.renderAuth(); }
+    if (open) { Log.ev('account'); this.authStep = null; this.backupMsg(''); this.renderAuth(); }
   },
 
   backupMsg(text) { document.getElementById('backupMsg').textContent = text || ''; },
@@ -2145,10 +2278,12 @@ const App = {
       this.closeGuide();
     });
     document.getElementById('guideNever').addEventListener('click', () => {
+      Log.ev('guide', 'never');
       markGuideSeen();
       this.closeGuide();
     });
     document.getElementById('guideBtn').addEventListener('click', () => {
+      Log.ev('guide', 'reopen');
       this.toggleBackup(false);
       this.openGuide();
     });
@@ -2169,6 +2304,7 @@ const App = {
     });
 
     el('logoutBtn').addEventListener('click', async () => {
+      Log.ev('login', 'logout');
       try { await Sync.call('/api/auth/logout', { method: 'POST' }); }
       catch (e) { /* 어차피 끊는다 */ }
       Sync.email = null;
@@ -2196,9 +2332,11 @@ const App = {
     try {
       this.renderAuth('보내는 중…');
       await Sync.call('/api/auth/request', { method: 'POST', body: JSON.stringify({ email }) });
+      Log.ev('login', 'request');
       this.renderAuth('메일로 여섯 자리를 보냈습니다');
       document.getElementById('loginCode').focus();
     } catch (e) {
+      Log.ev('login', 'fail');
       this.renderAuth(AUTH_ERRORS[e.code] || '안 됐습니다 · 잠시 뒤에 다시');
     } finally { this.authBusy = false; }
   },
@@ -2216,6 +2354,7 @@ const App = {
         method: 'POST', body: JSON.stringify({ email, code }),
       });
       Sync.email = out.email;
+      Log.ev('login', 'verify');
       this.authStep = null;
       this.renderAuth('맞추는 중…');
       await this.firstLink();
@@ -2458,6 +2597,9 @@ const App = {
       };
       this.week.days[dayKey].push(data);
       this.save();
+      /* 글자는 보내지 않는다. 길이만 — 한 줄에 안 들어가는 일이 잦은지 보려고 */
+      Log.ev('add', dayKey === 'free' ? 'free' : 'day',
+             text.length, this.week.days[dayKey].length);
 
       const item = this.makeItem(data, dayKey, listEl);
       listEl.insertBefore(item.el, input);    // 입력창은 늘 목록 맨 아래
@@ -2504,6 +2646,7 @@ const App = {
       input.remove();
       this.week.notes[key] = text;
       this.week.noteAt[key] = Date.now();
+      Log.ev('note', text ? 'set' : 'clear', text.length);
       sub.textContent = text;
       sub.hidden = false;
       this.save();
@@ -2542,6 +2685,7 @@ const App = {
       if (!text) { this.removeItem(item, dayKey); return; }
       item.data.text = text;
       item.data.updatedAt = Date.now();
+      Log.ev('edit', dayKey === 'free' ? 'free' : 'day', text.length);
       item.textEl.textContent = text;
       this.save();
       item.el.hidden = false;                 // 제자리에 그대로 둔다
@@ -2563,6 +2707,7 @@ const App = {
 
   /* ── 삭제: 롱프레스. 확인 다이얼로그 없음 ────────────────── */
   removeItem(item, dayKey) {
+    Log.ev('del', dayKey === 'free' ? 'free' : 'day', item.data.struck ? 1 : 0);
     const list = this.week.days[dayKey];
     const i = list.indexOf(item.data);
     if (i >= 0) list.splice(i, 1);
