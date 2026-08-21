@@ -222,12 +222,49 @@ await page.waitForTimeout(120);
 check('서버가 있으면 로그인 줄이 돌아온다',
   await page.locator('.guide-list li:not([hidden])').count(), 4);
 
-/* 닫는 길이 둘 — 카드 밖을 누르거나 닫기를 누르거나 */
+/* 한 번에 한 줄씩 짚는다. 끝까지 짚어야 닫을 수 있다 */
+const 단계 = () => page.evaluate(() => ({
+  또렷: Array.from(document.querySelectorAll('.guide-list li:not([hidden])'))
+    .map(li => (li.classList.contains('on') ? 1 : 0)),
+  닫기: !document.getElementById('guideClose').disabled,
+  체크: !document.getElementById('guideNever').disabled,
+}));
+const 카드 = await page.locator('.guide-card').boundingBox();
+const 넘기기 = async () => {
+  await page.mouse.click(카드.x + 카드.width / 2, 카드.y + 18);
+  await page.waitForTimeout(150);
+};
+
+check('처음엔 첫 줄만 또렷하다', await 단계(), { 또렷: [1, 0, 0, 0], 닫기: false, 체크: false });
+await 넘기기();
+check('한 번 누르면 둘째 줄', await 단계(), { 또렷: [0, 1, 0, 0], 닫기: false, 체크: false });
+await 넘기기();
+check('또 누르면 셋째 줄', await 단계(), { 또렷: [0, 0, 1, 0], 닫기: false, 체크: false });
+await 넘기기();
+check('끝 줄에 닿으면 닫을 수 있다', await 단계(), { 또렷: [0, 0, 0, 1], 닫기: true, 체크: true });
+await 넘기기();
+check('끝에서 더 눌러도 카드 안이면 안 닫힌다', await page.locator('#guide').isVisible(), true);
+
+/* 끝까지 짚기 전에는 밖을 눌러도 닫히지 않고 다음 줄로 간다 */
 await page.mouse.click(195, 30);
 await page.waitForTimeout(200);
-check('카드 밖을 누르면 닫힌다', await page.locator('#guide').isVisible(), false);
+check('다 짚은 뒤에는 카드 밖을 눌러 닫는다', await page.locator('#guide').isVisible(), false);
+
 await page.reload(); await page.waitForTimeout(400);
 check('그냥 닫았으면 다음에 다시 뜬다', await page.locator('#guide').isVisible(), true);
+check('다시 열면 첫 줄부터', await 단계(), { 또렷: [1, 0, 0, 0], 닫기: false, 체크: false });
+await page.mouse.click(195, 30);        // 아직 첫 줄 — 밖을 눌러도 넘어가기만 한다
+await page.waitForTimeout(200);
+check('덜 짚었으면 밖을 눌러도 안 닫힌다', await page.locator('#guide').isVisible(), true);
+check('대신 다음 줄로 간다', (await 단계()).또렷, [0, 1, 0, 0]);
+
+const 끝까지 = async () => {
+  for (let i = 0; i < 5; i++) {
+    if ((await 단계()).닫기) return;
+    await 넘기기();
+  }
+};
+await 끝까지();
 await page.locator('#guideClose').click();
 await page.waitForTimeout(200);
 check('닫기로도 닫힌다', await page.locator('#guide').isVisible(), false);
@@ -235,6 +272,7 @@ await page.reload(); await page.waitForTimeout(400);
 check('체크하지 않았으면 또 뜬다', await page.locator('#guide').isVisible(), true);
 
 /* 체크하고 닫아야 영영 안 뜬다 */
+await 끝까지();
 await page.locator('#guideNever').check();
 await page.locator('#guideClose').click();
 await page.waitForTimeout(200);
@@ -293,11 +331,32 @@ check('입력창 닫힘', await page.locator('.entry').count(), 0);
   await page.waitForTimeout(300);
   check('빈 곳 탭으로 그 칸에 적힌다', await days('sat'), ['빈 곳에서 적음']);
 }
+/* 항목 행은 칸 너비만큼 넓은데 글자는 그보다 짧다.
+   **글자 오른쪽의 빈 자리는 항목이 아니라 그 칸의 빈 곳이다** (spec §4-1) */
 {
-  const it = await cell(5).locator('.item').first().boundingBox();
-  await page.mouse.click(it.x + 10, it.y + it.height / 2);
+  const row = await cell(5).locator('.item').first().boundingBox();
+  const txt = await cell(5).locator('.item-text').first().boundingBox();
+  check('글자보다 행이 훨씬 넓다', row.width > txt.width + 60, true);
+  await page.mouse.click(row.x + row.width - 8, row.y + row.height / 2);
   await page.waitForTimeout(450);
-  check('항목 위를 누른 것은 편집이지 새 항목이 아니다',
+  check('글자 옆 빈 자리를 누르면 새 항목이 열린다',
+    await page.evaluate(() => !!App.cells.sat.listEl.querySelector('.entry')), true);
+  check('그때 편집이 열리지는 않는다', await page.evaluate(() =>
+    App.cells.sat.items.some(i => i.el.hidden)), false);
+  await page.keyboard.type('옆에서 적음');
+  await page.keyboard.press('Enter');
+  await page.locator('#weekTitle').click();
+  await page.waitForTimeout(300);
+  check('옆 빈 자리로 적은 것이 그 칸에 들어간다',
+    await days('sat'), ['빈 곳에서 적음', '옆에서 적음']);
+  await page.evaluate(() => { App.week.days.sat = App.week.days.sat.slice(0, 1); App.save(); App.render(); });
+  await page.waitForTimeout(250);
+}
+{
+  const it = await cell(5).locator('.item-text').first().boundingBox();
+  await page.mouse.click(it.x + 3, it.y + it.height / 2);
+  await page.waitForTimeout(450);
+  check('글자 위를 누른 것은 편집이지 새 항목이 아니다',
     await page.evaluate(() => (App.cells.sat.listEl.querySelector('.entry') || {}).value),
     '빈 곳에서 적음');
   await page.keyboard.press('Escape');
@@ -323,15 +382,36 @@ await page.waitForTimeout(250);
   await page.waitForTimeout(250);
 }
 
+/* note 칸은 라벨 높이(20px)만 과녁이었다 — 열 전체가 과녁이어야 한다 */
+{
+  const col = await page.locator('.free').boundingBox();
+  const cell0 = await page.evaluate(() => {
+    const r = App.cells.free.section.getBoundingClientRect();
+    return { h: r.height };
+  });
+  check('note 칸이 열 전체를 차지한다', cell0.h > col.height - 8, true);
+  await page.mouse.click(col.x + col.width / 2, col.y + col.height - 40);
+  await page.waitForTimeout(400);
+  check('note 아래 빈 곳을 누르면 note에 적힌다',
+    await page.evaluate(() => !!App.cells.free.listEl.querySelector('.entry')), true);
+  await page.keyboard.type('영어 단어');
+  await page.keyboard.press('Enter');
+  await page.locator('#weekTitle').click();
+  await page.waitForTimeout(300);
+  check('note에 들어간다', await days('free'), ['영어 단어']);
+  await page.evaluate(() => { App.week.days.free = []; App.save(); App.render(); });
+  await page.waitForTimeout(250);
+}
+
 console.log('\n── 편집 · 삭제 ──');
-await cell(3).locator('.item').nth(1).click();
+await cell(3).locator('.item').nth(1).locator('.item-text').click();
 await page.waitForTimeout(420);
 await page.locator('.entry').fill('웨비나 참석');
 await page.keyboard.press('Enter');
 await page.waitForTimeout(300);
 check('탭 편집 — 자리 유지', await days('thu'), ['멜팅의원', '웨비나 참석', '낭만백수달']);
 
-await cell(3).locator('.item').nth(1).click();
+await cell(3).locator('.item').nth(1).locator('.item-text').click();
 await page.waitForTimeout(420);
 check('편집 중에는 원본이 안 보인다', await page.evaluate(() => {
   const hidden = Array.from(document.querySelectorAll('.item[hidden]'));
@@ -564,8 +644,12 @@ await page.locator('#guideBtn').click();
 await page.waitForTimeout(250);
 check('백업 줄에서 안내를 다시 열 수 있다', await page.locator('#guide').isVisible(), true);
 check('안내를 열면 계정 화면은 닫힌다', await page.locator('#account').isVisible(), false);
-await page.mouse.click(195, 700);
+check('다시 열면 첫 줄부터 짚는다', await page.evaluate(() => App.guideStep), 0);
+/* 끝까지 짚어야 닫힌다 — 한 번 눌러서는 다음 줄로 갈 뿐이다 */
+await 끝까지();
+await page.locator('#guideClose').click();
 await page.waitForTimeout(200);
+check('다시 본 안내도 닫힌다', await page.locator('#guide').isVisible(), false);
 
 console.log('\n── 삭제하면 아래가 위로 올라온다 ──');
 /* 지운 자리가 비어 있으면 안 된다. 지운 경로가 여럿이라 전부 확인한다 */

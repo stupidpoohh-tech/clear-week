@@ -204,7 +204,11 @@
     min-height: 0; min-width: 0;
     border-left: 1px solid var(--rule);
     padding-left: 10px;
+    /* 칸이 열 전체를 차지해야 아래 빈 곳을 눌러도 적힌다.
+       안 그러면 과녁이 라벨 높이(20px)밖에 안 된다. */
+    display: flex; flex-direction: column;
   }
+  .cell.free-cell { flex: 1 1 auto; }
 
   /* ── 칸 ──────────────────────────────────────────────────── */
   .cell {
@@ -325,6 +329,10 @@
     border-bottom: 1px solid var(--rule-soft);
   }
   .guide-list li[hidden] { display: none; }
+  /* 한 번에 한 줄씩 짚는다. 나머지는 옅게 남아 앞으로 무엇이 오는지 보인다.
+     애니메이션은 넣지 않는다 — 취소선 말고는 움직이지 않는다 (§7) */
+  .guide-list li { opacity: 0.32; }
+  .guide-list li.on { opacity: 1; }
   .guide-list .mark {
     flex: none;
     width: 34px; height: 34px; border-radius: 50%;
@@ -354,6 +362,9 @@
     display: flex; align-items: center; justify-content: space-between; gap: 12px;
     padding-top: 15px;
   }
+  /* 끝까지 짚기 전에는 닫는 손잡이도 옅다 — 아직 차례가 아니라는 표시 */
+  .guide-foot.wait { opacity: 0.38; }
+  .guide-foot button:disabled, .guide-foot.wait label { cursor: default; }
   .guide-foot label {
     display: flex; align-items: center; gap: 9px;
     font-size: 13px; color: var(--ink); cursor: pointer;
@@ -517,6 +528,7 @@ const STROKE = {
   /* ── 판정 ────────────────────────────────────────────────── */
   commitRatio: 0.6,      // 확정 임계값 (해당 줄 폭 대비 통과 비율)
   slopPx: 8,             // 긋기 vs 스크롤 초기 방향 판정 이동량 (px)
+  tapPadPx: 10,          // 글자 오른쪽 이만큼까지는 아직 '항목 위'로 친다
   doubleTapMs: 260,      // 더블탭 판정 간격 (ms) — 탭 편집도 이만큼 기다림
   longPressMs: 500,      // 롱프레스 삭제 (ms)
   hapticOnCommit: true,  // 확정 시 진동 (iOS 사파리는 지원 안 함 → 무시됨)
@@ -1364,7 +1376,15 @@ class StrikeItem {
     this.lastTapAt = 0;
     this.tapTimer = null;
 
-    this.el.addEventListener('pointerdown', e => this.onDown(e));
+    this.wantAdd = false;      // 글자 옆 빈 자리를 눌렀나 (click에서 연다)
+    this.el.addEventListener('pointerdown', e => { this.wantAdd = false; this.onDown(e); });
+    /* 입력창은 pointerup이 아니라 click에서 연다 — 터치 브라우저가 click 시점에
+       주는 포커스에 빼앗겨 곧바로 닫힌다 (spec §4-1). */
+    this.el.addEventListener('click', () => {
+      if (!this.wantAdd) return;
+      this.wantAdd = false;
+      this.host.add();
+    });
     this.el.addEventListener('pointermove', e => this.onMove(e));
     this.el.addEventListener('pointerup', e => this.onUp(e));
     this.el.addEventListener('pointercancel', () => this.onCancel());
@@ -1421,6 +1441,15 @@ class StrikeItem {
   clearStrokes() {
     this.strokes.forEach(s => { s.el.remove(); if (s.mask) s.mask.remove(); });
     this.strokes = [];
+  }
+
+  /* 글자가 끝나는 자리보다 오른쪽인가 */
+  pastText(clientX) {
+    const rects = lineRects(this.textEl);
+    if (!rects.length) return false;
+    let right = -Infinity;
+    for (const r of rects) if (r.right > right) right = r.right;
+    return clientX > right + STROKE.tapPadPx;
   }
 
   strokeOnLine(i) { return this.strokes.find(s => s.lineIndex === i); }
@@ -1538,6 +1567,11 @@ class StrikeItem {
     if (p.mode === 'pass') return;
 
     if (p.moved >= 10) return;
+
+    /* 항목 행은 칸 너비만큼 넓은데 글자는 그보다 훨씬 짧다.
+       **글자 오른쪽의 빈 자리는 항목이 아니라 그 칸의 빈 곳이다** —
+       거기를 누르면 편집이 아니라 새 항목이 열린다 (spec §4-1). */
+    if (this.pastText(e.clientX)) { this.wantAdd = true; return; }
 
     /* 탭 = 편집, 더블탭 = 남은 줄까지 자동으로 긋기 */
     const now = e.timeStamp;
@@ -1860,6 +1894,7 @@ const App = {
   monday: null,
   week: null,
   guideOn: false,
+  guideStep: 0,
   /* 사람이 이 기기에서 고친 횟수. 서버에 올린 뒤 이 값이 달라졌으면
      돌아온 응답은 이미 낡은 것이다 (spec §11 — 밀어 올리는 중의 획). */
   rev: 0,
@@ -2141,6 +2176,7 @@ const App = {
       /* 긋기·지우개도 여기를 지난다 — 합칠 때 어느 쪽이 나중인지 알아야 한다 */
       save: () => { data.updatedAt = Date.now(); this.save(); },
       edit: item => this.editItem(item, dayKey, listEl),
+      add: () => this.openEntry(dayKey, listEl),   // 글자 옆 빈 자리를 눌렀을 때
       remove: item => this.removeItem(item, dayKey),
     });
   },
@@ -2287,10 +2323,12 @@ const App = {
   /* ── 첫 실행 안내 — 버튼이 하나도 없는 화면이라 첫 단서는 필요하다 ──
      아무 데나 누르면 이번만 닫히고, 다시 보지 않기를 누르면 영영 안 뜬다. */
   bindGuide() {
-    /* 카드 밖(어둑한 바탕)을 누르면 닫힌다. 카드 안은 제 일을 하게 둔다 */
-    document.getElementById('guide').addEventListener('pointerdown', e => {
-      if (e.target.closest('.guide-card')) return;
-      this.closeGuide();
+    /* 아무 데나 눌러 한 줄씩 내려간다. 다 짚은 뒤에야 카드 밖을 눌러 닫힌다 */
+    document.getElementById('guide').addEventListener('click', e => {
+      if (e.target.closest('.guide-foot')) return;    // 발치 손잡이는 제 일을 한다
+      const rows = this.guideRows();
+      if (this.guideStep < rows.length - 1) { this.showGuideStep(this.guideStep + 1); return; }
+      if (!e.target.closest('.guide-card')) this.closeGuide();
     });
     document.getElementById('guideClose').addEventListener('click', () => {
       if (document.getElementById('guideNever').checked) Log.ev('guide', 'never');
@@ -2467,7 +2505,10 @@ const App = {
            : '이 기기에만 저장됩니다');
     /* 안내는 서버가 있는지 알기 전에 먼저 뜬다(`/api/me`는 나중에 온다).
        답이 오면 로그인 줄을 켜거나 끈다 — 없는 것을 안내하지 않게 (spec §13). */
-    if (this.guideOn) el('guideSync').hidden = !Sync.ready;
+    if (this.guideOn) {
+      el('guideSync').hidden = !Sync.ready;
+      this.showGuideStep(this.guideStep);     // 줄 수가 바뀌었을 수 있다
+    }
   },
 
   openGuide() {
@@ -2478,6 +2519,25 @@ const App = {
        없는 것을 안내하지 않는다. `/api/me`가 늦게 오면 renderAuth가 다시 맞춘다. */
     document.getElementById('guideSync').hidden = !Sync.ready;
     document.getElementById('guide').hidden = false;
+    this.showGuideStep(0);
+  },
+
+  /* 보이는 줄만 센다 — 서버가 없으면 로그인 줄이 빠진다 */
+  guideRows() {
+    return Array.from(document.querySelectorAll('.guide-list li')).filter(li => !li.hidden);
+  },
+
+  /* 한 번에 한 줄만 또렷하다. 끝까지 짚어야 닫을 수 있다 —
+     넷을 한꺼번에 늘어놓으면 어디부터 읽을지가 없다 (spec §4-4). */
+  showGuideStep(i) {
+    const rows = this.guideRows();
+    if (!rows.length) return;
+    this.guideStep = clamp(i, 0, rows.length - 1);
+    rows.forEach((li, n) => li.classList.toggle('on', n === this.guideStep));
+    const last = this.guideStep >= rows.length - 1;
+    document.querySelector('.guide-foot').classList.toggle('wait', !last);
+    document.getElementById('guideClose').disabled = !last;
+    document.getElementById('guideNever').disabled = !last;
   },
 
   /* 닫는 길이 여럿이라 어디로 닫든 체크한 뜻은 지킨다 */
