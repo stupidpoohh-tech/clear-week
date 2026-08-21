@@ -1383,8 +1383,58 @@ console.log('\n── 방문자 행동로그 ──');
     Sound.resume = real;
     return called >= 2;
   }), true);
-  /* 무음 스위치를 무시할지는 손잡이 하나로 정한다 — 기본은 존중 */
-  check('무음은 기본으로 존중한다', await page.evaluate(() => SOUND.ignoreSilent), false);
+  /* 기기 무음은 무시한다 — 대신 머리말에 끄는 손잡이를 내놓았다 (spec §4-5) */
+  check('기기 무음은 무시한다', await page.evaluate(() => SOUND.ignoreSilent), true);
+}
+
+/* 머리말의 스피커 — 사람이 앱 안에서 끄고 켠다 */
+{
+  const 상태 = () => page.evaluate(() => {
+    const b = document.getElementById('soundBtn');
+    return {
+      on: Sound.on, live: Sound.live(), 진하게: b.classList.contains('on'),
+      물결: getComputedStyle(b.querySelector('.wave')).display !== 'none',
+      가위표: getComputedStyle(b.querySelector('.mute')).display !== 'none',
+      말: b.getAttribute('aria-label'),
+    };
+  });
+  check('스피커는 계정 표시 왼쪽에 있다', await page.evaluate(() => {
+    const s = document.getElementById('soundBtn').getBoundingClientRect();
+    const a = document.getElementById('acctBtn').getBoundingClientRect();
+    return s.right <= a.left + 1;
+  }), true);
+  check('주 이동 화살표는 날짜 옆으로 옮겼다', await page.evaluate(() => {
+    const t = document.getElementById('weekTitle').getBoundingClientRect();
+    const n = document.getElementById('next').getBoundingClientRect();
+    const a = document.getElementById('acctBtn').getBoundingClientRect();
+    return n.left >= t.right - 1 && n.right < a.left - 40;
+  }), true);
+
+  check('처음엔 켜져 있다', await 상태(),
+    { on: true, live: true, 진하게: true, 물결: true, 가위표: false, 말: '소리 끄기' });
+  await page.locator('#soundBtn').click();
+  await page.waitForTimeout(200);
+  check('누르면 꺼진다 — 표시도 ✕로 바뀐다', await 상태(),
+    { on: false, live: false, 진하게: false, 물결: false, 가위표: true, 말: '소리 켜기' });
+  check('꺼 두면 기억한다', await page.evaluate(() => localStorage['clearweek:sound']), 'off');
+
+  /* 꺼져 있으면 아무 소리도 만들지 않는다 */
+  check('꺼져 있으면 소리 상자를 만들지도 않는다', await page.evaluate(() => {
+    const had = !!Sound.ctx;
+    Sound.ctx = null;
+    Sound.init();
+    const made = !!Sound.ctx;
+    if (had) Sound.init();
+    return made;
+  }), false);
+
+  await page.reload();
+  await page.waitForTimeout(500);
+  check('새로고침해도 꺼진 채', (await 상태()).on, false);
+  await page.locator('#soundBtn').click();
+  await page.waitForTimeout(200);
+  check('다시 누르면 켜진다', (await 상태()).on, true);
+  check('켜면 기억도 바뀐다', await page.evaluate(() => localStorage['clearweek:sound']), 'on');
 }
 
 console.log('\n── 확대 차단 ──');
