@@ -727,6 +727,9 @@ const WEEK_DAYS = DAY_KEYS.slice(0, 7);   /* 왼쪽 열에 세로로 쌓이는 �
    기준을 항목 수로 못 박지 않는 이유: 한 열에 들어가는 줄 수가 화면 높이에 따라
    다르다(작은 폰 3줄, 큰 폰 4줄). 숫자를 박으면 어떤 폰에서는 자리가 남는데
    나뉘고, 어떤 폰에서는 나뉘어도 잘린다. 실제로 넘치는지 보고 정한다. */
+/* 머리말을 가리키는 마디의 최대 너비 (px). note 칸만 쓰면 다섯 줄로 접힌다 */
+const GUIDE_UNDER_W = 250;
+
 const AUTO_SPLIT = {
   maxColumns: 3,   // 한 칸을 최대 이만큼까지 나눈다
 };
@@ -888,7 +891,8 @@ function guideSample(weekId) {
   w.days.tue = [mk('장보기')];
   w.days.wed = [mk('회의자료 정리', true)];
   w.days.thu = [mk('낭만백수달'), mk('영상편집')];
-  w.days.free = [mk('영어 단어'), mk('책 반납')];
+  /* note 칸은 비워 둔다. 설명하는 마디가 없어 배울 것이 없었고,
+     계정 마디가 사람 표시에서 멀어지게 만들고 있었다 (spec §4-4). */
   return w;
 }
 
@@ -908,12 +912,17 @@ const GUIDE_HINTS = [
      `verb`·`tail`이 함수면 그릴 때 값을 매긴다: 서버가 없으면 로그인 버튼이
      아예 안 나타나므로 (spec §13) 없는 것을 안내하지 않는다. */
   { at: ['el', 'acctBtn'], ring: true, under: true,
-    verb: '사람 표시',
-    tail: () => (Sync.ready ? '백업 · 로그인 · 쓰는 법' : '백업 · 쓰는 법') },
+    /* 이름을 부르지 않는다 — 화살표와 동그라미가 이미 가리키고 있다.
+       메뉴를 늘어놓지도 않는다. 눌러서 무엇이 되는지만 말한다. */
+    verb: '누른다',
+    tail: () => (Sync.ready
+      ? '로그인하면 폰과 PC가 같은 주를 봅니다'
+      : '적은 것을 파일로 백업할 수 있습니다') },
+  /* 좁은 note 칸에는 짧은 말만 두고, 긴 설명은 넓은 요일 칸에서 한다 */
   { at: ['cell', 'sat'], plain: true,
     tail: () => (Sync.ready
-      ? '로그인 없이도 전부 됩니다 — 적은 것은 이 기기에 남습니다. 로그인하면 폰과 PC가 같은 주를 봅니다.'
-      : '적은 것은 이 기기에 남습니다. 백업으로 다른 기기에 옮길 수 있습니다.') },
+      ? '로그인은 안 해도 됩니다 — 적은 것은 이 기기에 남고, 파일로 백업할 수 있습니다.'
+      : '적은 것은 이 기기에 남습니다.') },
 ];
 
 function markGuideSeen() {
@@ -2551,6 +2560,7 @@ const App = {
 
     /* 글은 그릴 때 정한다 — 서버 유무에 따라 달라지는 마디가 있다 */
     const val = v => (typeof v === 'function' ? v() : v);
+    const placed = [];        // 머리말 마디를 비켜 놓기 위해 자리를 기억한다
 
     GUIDE_HINTS.forEach(h => {
       const anchor = this.guideAnchor(h.at);
@@ -2560,18 +2570,24 @@ const App = {
       let top = h.plain ? r.top + 6 : r.top - 2;
       let width = daysRight - left - 6;
 
-      /* 머리말을 가리키는 마디는 오른쪽에 놓을 자리가 없다.
-         note 칸의 적힌 것 아래로 내리고, 화살표를 오른쪽 끝에 두어 위를 가리킨다. */
+      /* 머리말을 가리키는 마디는 오른쪽에 놓을 자리가 없다. 아래로 내리고
+         화살표를 오른쪽 끝에 두어 위를 가리킨다. note 칸만 쓰면 다섯 줄로
+         접히므로 왼쪽으로 더 벌리고, 이미 놓인 마디와 겹치면 그만큼 내린다. */
       if (h.under) {
-        const free = this.cells.free;
-        const box = free && free.listEl.getBoundingClientRect();
-        const rows = free ? free.items.filter(i => !i.el.hidden) : [];
-        const below = rows.length
-          ? rows[rows.length - 1].el.getBoundingClientRect().bottom
-          : (box ? box.top : r.bottom);
-        left = box ? box.left : r.right - 150;
-        width = box ? box.width - 4 : 150;
-        top = Math.max(r.bottom + 8, below + 14);
+        const box = daysEl.getBoundingClientRect();
+        const wide = Math.min(GUIDE_UNDER_W, r.right - box.left - 4);
+        left = r.right - wide;
+        width = wide;
+        top = r.bottom + 8;
+        const mine = { left, right: left + width, top, bottom: top + 18 };
+        for (const p of placed) {
+          if (p.left < mine.right && mine.left < p.right &&
+              p.top < mine.bottom && mine.top < p.bottom) {
+            mine.top = p.bottom + 6;
+            mine.bottom = mine.top + 18;
+          }
+        }
+        top = mine.top;
       }
       /* 오른쪽에 자리가 없으면(좁은 화면) 그 아랫줄로 내린다.
          요일 열 밖으로 삐져나가면 note 칸 글자와 겹친다.
@@ -2599,6 +2615,8 @@ const App = {
         if (h.under) el.appendChild(document.createElement('i')).textContent = '↑';
       }
       wrap.appendChild(el);
+      const box = el.getBoundingClientRect();
+      placed.push({ left: box.left, right: box.right, top: box.top, bottom: box.bottom });
 
       if (h.ring) {
         const ring = wrap.appendChild(document.createElement('div'));

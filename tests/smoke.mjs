@@ -198,19 +198,20 @@ check('설명이 요일 열을 넘지 않는다', await page.evaluate(() => {
   return Array.from(document.querySelectorAll('.guide-hint:not(.under)'))
     .filter(e => e.getBoundingClientRect().right > right + 1).length;
 }), 0);
-/* 머리말 마디는 note 칸 안에 있고 화면 밖으로 나가지 않는다 */
-check('계정 설명이 note 칸 안에 있다', await page.evaluate(() => {
+/* 머리말 마디는 사람 표시 바로 아래에서 시작하고, 화살표가 그 밑에 선다.
+   note 칸만 쓰면 다섯 줄로 접히므로 왼쪽으로 벌리되 화면은 넘지 않는다. */
+check('계정 설명이 사람 표시 아래에 붙는다', await page.evaluate(() => {
   const e = document.querySelector('.guide-hint.under').getBoundingClientRect();
-  const f = App.cells.free.listEl.getBoundingClientRect();
-  return e.left >= f.left - 1 && e.right <= Math.min(f.right, innerWidth) + 1;
+  const b = document.getElementById('acctBtn').getBoundingClientRect();
+  return { 아래에: e.top > b.bottom, 오른끝맞춤: Math.abs(e.right - b.right) <= 2,
+           화면안: e.left >= 0 && e.right <= innerWidth + 1 };
+}), { 아래에: true, 오른끝맞춤: true, 화면안: true });
+check('계정 설명은 두 줄을 넘지 않는다', await page.evaluate(() => {
+  const e = document.querySelector('.guide-hint.under');
+  return e.getBoundingClientRect().height <= parseFloat(getComputedStyle(e).lineHeight) * 2 + 2;
 }), true);
-check('계정 설명이 note에 적힌 것을 가리지 않는다', await page.evaluate(() => {
-  const e = document.querySelector('.guide-hint.under').getBoundingClientRect();
-  return App.cells.free.items.some(i => {
-    const r = i.el.getBoundingClientRect();
-    return r.height > 0 && e.top < r.bottom - 1;
-  });
-}), false);
+/* note 칸 예시는 지웠다 — 설명하는 마디가 없어 배울 것이 없었다 */
+check('note 칸에는 예시를 두지 않는다', await page.evaluate(() => App.week.days.free.length), 0);
 check('사람 표시에 동그라미가 둘린다', await page.evaluate(() => {
   const b = document.getElementById('acctBtn').getBoundingClientRect();
   return Array.from(document.querySelectorAll('.guide-ring')).some(g => {
@@ -225,8 +226,13 @@ check('사람 표시에 동그라미가 둘린다', await page.evaluate(() => {
     Array.from(document.querySelectorAll('.guide-hint')).map(e => e.textContent).join(' / '));
   const 켜짐 = await 글();
   check('로그인하면 기기끼리 맞춰진다고 알린다', /로그인하면.*폰과 PC/.test(켜짐), true);
-  check('로그인 없이도 된다고 알린다', /로그인 없이도 전부 됩니다/.test(켜짐), true);
-  check('사람 표시가 무엇인지 알린다', /사람 표시/.test(켜짐), true);
+  check('로그인 안 해도 된다고 알린다', /로그인은 안 해도 됩니다/.test(켜짐), true);
+  check('백업이 있다는 것도 알린다', /백업/.test(켜짐), true);
+  /* 가리키는 것의 이름을 부르지 않는다 — 화살표와 동그라미가 이미 가리킨다.
+     한때 '사람 표시 — 백업 · 로그인 · 쓰는 법'이라고 적었는데, 그건 설명이
+     아니라 메뉴 목록이었다. 다른 마디처럼 눌러서 무엇이 되는지만 말한다. */
+  check('가리키는 것의 이름을 부르지 않는다', /사람 표시|아이콘|버튼/.test(켜짐), false);
+  check('메뉴를 늘어놓지 않는다', /백업 · 로그인|로그인 · 쓰는 법/.test(켜짐), false);
 
   /* 서버가 없으면 로그인 버튼이 아예 안 나타난다 (spec §13) —
      그때는 안내도 로그인을 입에 담으면 안 된다 */
