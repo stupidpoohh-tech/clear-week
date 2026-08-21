@@ -10,6 +10,8 @@ import {
   sanitizeEvent, sanitizeBatch, toDataPoint, platformOf,
   LOG_EVENTS, LOG_DETAILS, LOG_MAX_BATCH,
 } from '../functions/_log.js';
+/* 받는 곳도 함께 본다 — 문지기만 성해도 문이 잘못 대답하면 소용없다 */
+import { onRequestPost } from '../functions/api/log.js';
 
 let pass = 0, fail = 0;
 const check = (name, got, want) => {
@@ -116,6 +118,40 @@ check('모르면 other', [platformOf(''), platformOf(null), platformOf('curl/8.4
 /* 브라우저 문자열을 통째로 담으면 그것만으로 지문이 된다 */
 check('원래 문자열은 남지 않는다',
   platformOf('Mozilla/5.0 (iPhone) 아주 긴 고유 문자열').length < 10, true);
+
+console.log('\n── 받는 곳 ──');
+{
+  const fakeReq = events => ({
+    json: async () => ({ events }),
+    cf: { country: 'KR' },
+    headers: { get: () => 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X)' },
+  });
+
+  /* 데이터셋을 안 묶었으면 성공이라고 대답하면 안 된다.
+     204를 주면 클라이언트가 5초마다 영원히 보내고 서버는 전부 버린다. */
+  const noBinding = await onRequestPost({ request: fakeReq([ev()]), env: {} });
+  check('바인딩이 없으면 501 — 클라이언트가 그만둘 수 있게', noBinding.status, 501);
+
+  const written = [];
+  const env = { CLEARWEEK_LOG: { writeDataPoint: d => written.push(d) } };
+  const ok = await onRequestPost({ request: fakeReq([ev(), ev({ ev: 'strike', d: '' })]), env });
+  check('묶여 있으면 204', ok.status, 204);
+  check('받은 만큼 적는다', written.length, 2);
+  check('나라와 갈래를 요청에서 채운다', [written[0].blobs[5], written[0].blobs[6]], ['kr', 'ios']);
+
+  written.length = 0;
+  const junk = await onRequestPost({ request: fakeReq([{ ev: 'nope', text: '치과' }]), env });
+  check('모르는 이벤트만 오면 아무것도 안 적는다', [junk.status, written.length], [204, 0]);
+
+  const broken = await onRequestPost({
+    request: { json: async () => { throw new Error('bad json'); }, cf: {}, headers: { get: () => '' } }, env });
+  check('몸통이 깨져도 조용히 204', broken.status, 204);
+
+  /* 로그가 앱을 멈추는 일은 없어야 한다 — 쓰다가 터져도 응답은 나간다 */
+  const boom = { CLEARWEEK_LOG: { writeDataPoint: () => { throw new Error('boom'); } } };
+  const survived = await onRequestPost({ request: fakeReq([ev()]), env: boom });
+  check('적다가 터져도 응답은 나간다', survived.status, 204);
+}
 
 console.log(`\n통과 ${pass} / 실패 ${fail}\n`);
 process.exit(fail ? 1 : 0);

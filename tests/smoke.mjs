@@ -1034,6 +1034,15 @@ console.log('\n── 방문자 행동로그 ──');
    서버의 문지기(`_log.js`)는 tests/log.mjs가 따로 검사한다.
    여기서는 **클라이언트가 애초에 무엇을 보내는지**를 본다 — 문지기에 기대지 않는다. */
 {
+  /* 배포본에서는 꺼 둔 상태로 나간다 — 읽을 길이 없는 기록은 짐일 뿐이다.
+     장치 자체는 성해야 하므로, 여기서는 켜고 잰다. */
+  check('배포본에서는 행동로그가 꺼져 있다', await page.evaluate(() => LOG.enabled), false);
+  check('꺼져 있으면 아무것도 모으지 않는다', await page.evaluate(() => {
+    Log.ev('today'); return Log.q.length;
+  }), 0);
+  await page.evaluate(() => { LOG.enabled = true; Log.start(); });
+  await page.waitForTimeout(200);
+
   const SECRET = '치과예약비밀번호1234';       // 이 글자가 로그에 나오면 실패다
 
   /* 여기 오기까지 쌓인 것을 먼저 다 비운다. 한 번에 40개씩만 나가므로
@@ -1081,9 +1090,12 @@ console.log('\n── 방문자 행동로그 ──');
   check('기기 ID는 무작위 열여섯 자', /^[a-z0-9]{16}$/.test(did), true);
   check('기기 ID에 메일 주소가 섞이지 않는다', did.includes('@'), false);
 
-  /* 다시 열면 — 기기는 그대로, 방문은 새로 */
+  /* 다시 열면 — 기기는 그대로, 방문은 새로.
+     다시 연 창은 배포본 그대로 꺼져 있으므로 여기서도 켜고 잰다. */
   await page.reload();
   await page.waitForTimeout(400);
+  await page.evaluate(() => { LOG.enabled = true; Log.start(); });
+  await page.waitForTimeout(150);
   check('기기 ID는 다시 열어도 그대로', await page.evaluate(() => Log.did), did);
   check('세션 ID는 열 때마다 새로 난다',
     (await page.evaluate(() => Log.sid)) === sid, false);
@@ -1121,7 +1133,10 @@ console.log('\n── 방문자 행동로그 ──');
     return n <= LOG.maxQueue;
   }), true);
 
-  await page.evaluate(() => { App.week.days.thu = []; App.week.days.fri = []; App.save(); App.render(); });
+  await page.evaluate(() => {
+    LOG.enabled = false; Log.stop();          // 잰 뒤에는 배포본과 같은 상태로 되돌린다
+    App.week.days.thu = []; App.week.days.fri = []; App.save(); App.render();
+  });
   await page.waitForTimeout(200);
 }
 
@@ -1137,7 +1152,8 @@ console.log('\n── 방문자 행동로그 ──');
   await dnt.reload();
   await dnt.waitForTimeout(400);
   api.logRaw.length = 0;
-  await dnt.evaluate(() => { Log.ev('today'); Log.flush(); });
+  /* 켜 두어도 추적 거부가 이긴다 — start()가 아예 물러난다 */
+  await dnt.evaluate(() => { LOG.enabled = true; Log.start(); Log.ev('today'); Log.flush(); });
   await dnt.waitForTimeout(300);
   check('추적 거부를 켜면 로그가 꺼진다', await dnt.evaluate(() => Log.off), true);
   check('추적 거부를 켜면 한 줄도 안 보낸다', api.logRaw.length, 0);

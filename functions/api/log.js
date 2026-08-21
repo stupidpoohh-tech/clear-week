@@ -13,9 +13,13 @@ const noContent = () => new Response(null, {
 });
 
 export async function onRequestPost({ request, env }) {
-  /* 대시보드에 데이터셋을 안 묶었으면 아무 일도 하지 않는다.
-     서버가 없어도 앱은 완전히 동작해야 한다 (spec §13). */
-  if (!env.CLEARWEEK_LOG) return noContent();
+  /* 데이터셋을 안 묶었으면 **받을 자리가 없다고 분명히 말한다.**
+     여기서 204(성공)를 돌려주면 클라이언트는 잘 간 줄 알고 5초마다 영원히
+     보내고, 서버는 그걸 전부 버린다 — 아무도 안 보는 짐만 오간다.
+     501을 받으면 클라이언트가 스스로 그만둔다 (spec §14). */
+  if (!env.CLEARWEEK_LOG) {
+    return new Response(null, { status: 501, headers: { 'cache-control': 'no-store' } });
+  }
 
   let body = null;
   try { body = await request.json(); } catch (e) { return noContent(); }
