@@ -154,9 +154,10 @@ await page.waitForTimeout(400);
 const cell = i => page.locator('.days .cell').nth(i);
 const days = key => page.evaluate(k => App.week.days[k].map(i => i.text), key);
 
-async function tapLabel(i) {
-  const b = await cell(i).locator('.cell-label').boundingBox();
-  await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2);
+/* 그 칸의 빈 곳을 누른다. 날짜를 눌러 만드는 기능은 없앴다 (spec §4-2) */
+async function tapCell(i) {
+  const b = await cell(i).boundingBox();
+  await page.mouse.click(b.x + b.width * 0.6, b.y + b.height - 10);
   await page.waitForTimeout(150);
 }
 async function type(lines) {
@@ -190,14 +191,14 @@ const 안내글 = () => page.evaluate(() =>
     .map(e => e.innerHTML.replace(/<br\s*\/?>/g, ' ').replace(/<[^>]+>/g, '')
                          .replace(/\s+/g, ' ').trim()));
 check('네 가지를 이 차례로 말한다', await 안내글(), [
-  '빈 곳이나 날짜를 눌러 새로 생성',
+  '빈 곳을 눌러 생성 (요일 아래, 요일 칸, 노트)',
   '글자 위를 그어서 완료. 문지르면 지워져요',
   '꾹 누르면 삭제',
   '로그인하면 기기간 연동할 수 있습니다',
 ]);
 check('중요한 말은 굵게', await page.evaluate(() =>
   Array.from(document.querySelectorAll('.guide-list li:not([hidden]) b')).map(e => e.textContent)),
-  ['새로 생성', '완료', '삭제', '기기간 연동']);
+  ['생성', '완료', '삭제', '기기간 연동']);
 
 /* 안내는 카드일 뿐이다 — 주간 표를 건드리지 않는다.
    예전에는 표본 주를 끼워 넣느라 저장·동기화를 멈춰 세워야 했다. */
@@ -308,7 +309,7 @@ check('돌아오면 다시 사라진다', await page.locator('#today').isVisible
 check('넘겼던 주와 다른 주다', (await page.locator('#weekTitle').textContent()) !== away, true);
 
 console.log('\n── 적기 ──');
-await tapLabel(3);
+await tapCell(3);
 await type(['멜팅의원', '웨비나']);
 check('엔터로 연속 입력', await days('thu'), ['멜팅의원', '웨비나']);
 
@@ -410,7 +411,7 @@ await page.waitForTimeout(250);
 
 /* blur만 믿지 않는다 — 딴 데를 누르는 순간(pointerdown)에도 확정한다 */
 {
-  await tapLabel(6);
+  await tapCell(6);
   await page.keyboard.type('누르는 순간 저장');
   const box = await cell(5).boundingBox();
   await page.mouse.move(box.x + box.width * 0.5, box.y + box.height - 8);
@@ -441,6 +442,44 @@ await page.waitForTimeout(250);
   await page.waitForTimeout(300);
   check('note에 들어간다', await days('free'), ['영어 단어']);
   await page.evaluate(() => { App.week.days.free = []; App.save(); App.render(); });
+  await page.waitForTimeout(250);
+}
+
+/* 왼쪽 여백(날짜와 그 아래)은 **요일 아래 메모**의 자리다.
+   날짜를 눌러 항목을 만들던 것과 꾹 눌러 끌어 메모를 열던 것은 둘 다 없앴다 —
+   누르는 자리와 적히는 자리가 어긋나 있었다 (spec §4-2). */
+{
+  const g = await page.evaluate(() => {
+    const el = App.cells.wed.section.querySelector('.cell-gutter');
+    const r = el.getBoundingClientRect();
+    const l = App.cells.wed.section.querySelector('.cell-label').getBoundingClientRect();
+    const c = App.cells.wed.section.getBoundingClientRect();
+    return { x: r.x, y: r.y, w: r.width, h: r.height, labelY: l.y, labelH: l.height, cellH: c.height };
+  });
+  check('여백이 칸 높이를 다 차지한다', g.h > g.cellH - 4, true);
+
+  /* 날짜 아래 빈 곳 */
+  await page.mouse.click(g.x + g.w / 2, g.y + g.h - 14);
+  await page.waitForTimeout(300);
+  check('날짜 아래 빈 곳을 누르면 메모가 열린다',
+    await page.locator('.sublabel-entry').count(), 1);
+  check('그때 항목 입력창은 열리지 않는다', await page.locator('.entry').count(), 0);
+  await page.keyboard.type('황상필');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(300);
+  check('메모가 요일 아래에 적힌다', await page.evaluate(() => App.week.notes.wed), '황상필');
+
+  /* 날짜 자체를 눌러도 항목이 아니라 메모다 — 만들기는 없앴다 */
+  const before = await days('wed');
+  await page.mouse.click(g.x + g.w / 2, g.labelY + g.labelH / 2);
+  await page.waitForTimeout(300);
+  check('날짜를 눌러도 항목은 안 생긴다', await page.locator('.entry').count(), 0);
+  check('날짜를 누르면 메모가 열린다', await page.locator('.sublabel-entry').count(), 1);
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(250);
+  check('항목 수는 그대로', await days('wed'), before);
+
+  await page.evaluate(() => { App.week.notes.wed = ''; App.week.noteAt.wed = Date.now(); App.save(); App.render(); });
   await page.waitForTimeout(250);
 }
 
@@ -590,10 +629,11 @@ const title = await page.locator('#weekTitle').textContent();
 await page.locator('#next').click(); await page.waitForTimeout(300);
 check('다음 주는 빈 주', await page.evaluate(() =>
   Object.values(App.week.days).reduce((n, a) => n + a.length, 0)), 0);
-check('다음 주도 편집 가능', await page.locator('.cell-label').first().evaluate(e => e.tagName), 'BUTTON');
+check('다음 주에도 빈 곳이 눌린다', await page.evaluate(() =>
+  !!App.cells.mon.section), true);
 await page.locator('#prev').click(); await page.locator('#prev').click(); await page.waitForTimeout(300);
-check('지난 주도 편집 가능', await page.locator('.cell-label').first().evaluate(e => e.tagName), 'BUTTON');
-await tapLabel(0);
+
+await tapCell(0);
 await type(['지난 주에 적기']);
 check('지난 주에도 적힌다', await days('mon'), ['지난 주에 적기']);
 check('머리말 아래 안내는 없다', await page.locator('#note').isVisible(), false);
@@ -843,7 +883,7 @@ check('로그인하면 사람 표시가 진해진다', await page.evaluate(() =>
 /* PC에서 적은 것이 서버로 올라간다 */
 await page.locator('#acctClose').click();      // 계정 화면 닫기
 await page.waitForTimeout(200);
-await tapLabel(0);
+await tapCell(0);
 await type(['PC에서 적음']);
 await page.locator('#weekTitle').click();      // 입력 끝내기
 await page.waitForTimeout(1400);
@@ -1071,10 +1111,10 @@ console.log('\n── 안드로이드(터치) ──');
   await touch.evaluate(() => { markGuideSeen(); });
   await touch.reload(); await touch.waitForTimeout(600);
 
-  const lb = await touch.locator('.days .cell').nth(0).locator('.cell-label').boundingBox();
-  await touch.touchscreen.tap(lb.x + lb.width / 2, lb.y + lb.height / 2);
+  const lb = await touch.locator('.days .cell').nth(0).boundingBox();
+  await touch.touchscreen.tap(lb.x + lb.width * 0.6, lb.y + lb.height - 10);
   await touch.waitForTimeout(350);
-  check('터치로 라벨을 눌러도 입력창이 열린다', await touch.locator('.entry').count(), 1);
+  check('터치로 빈 곳을 눌러도 입력창이 열린다', await touch.locator('.entry').count(), 1);
   check('입력창이 포커스를 지킨다', await touch.evaluate(() =>
     document.activeElement && document.activeElement.className), 'entry');
   await touch.keyboard.type('터치로 적음');
@@ -1095,7 +1135,7 @@ check('타자 소리와 깨우기가 있다', await page.evaluate(() =>
   [typeof Sound.key, typeof Sound.unlock]), ['function', 'function']);
 {
   await page.evaluate(() => { window.__keys = 0; Sound.key = () => { window.__keys++; }; });
-  await tapLabel(6);
+  await tapCell(6);
   await page.keyboard.type('소리');
   await page.waitForTimeout(200);
   const n = await page.evaluate(() => window.__keys);
@@ -1206,7 +1246,7 @@ console.log('\n── 방문자 행동로그 ──');
      그 위의 드래그는 긋기가 아니라 지우개가 된다 — 재던 것이 달라진다. */
   await page.evaluate(() => { App.week.days.thu = []; App.save(); App.render(); });
   await page.waitForTimeout(200);
-  await tapLabel(3);
+  await tapCell(3);
   await type([SECRET, '두번째']);
   await strikeFirst('thu');
   await page.evaluate(() => { while (Log.q.length) Log.flush(); });
@@ -1253,7 +1293,7 @@ console.log('\n── 방문자 행동로그 ──');
   /* 서버가 없어도 앱은 완전히 동작해야 한다 (spec §13).
      받을 자리가 없으면 한 번 두드려 보고 스스로 그만둔다. */
   api.logOff = true;
-  await tapLabel(4);
+  await tapCell(4);
   await type(['서버 없이도 적힌다']);
   await page.evaluate(() => Log.flush());
   await page.waitForTimeout(500);

@@ -228,7 +228,9 @@
 
   /* 라벨 = 살짝 누르면 항목 추가, 꾹 눌러 아래로 끌면 요일 아래 메모 */
   .cell-gutter { display: flex; flex-direction: column; min-width: 0; }
-  .cell.day > .cell-gutter { flex: 0 0 var(--label-w); align-self: flex-start; }
+  /* 라벨 아래 빈 곳까지가 요일 메모의 과녁이다 — 늘려 두지 않으면
+     라벨 높이만큼만 눌린다. 세로 상자라 자식은 그대로 위에 붙는다. */
+  .cell.day > .cell-gutter { flex: 0 0 var(--label-w); }
   .cell.free-cell > .cell-gutter { flex: none; width: 100%; }
 
   .cell-label {
@@ -482,7 +484,7 @@
     <ul class="guide-list">
       <li class="add">
         <span class="mark"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 5v10M5 10h10"/></svg></span>
-        <p>빈 곳이나 날짜를 눌러 <b>새로 생성</b></p>
+        <p>빈 곳을 눌러 <b>생성</b><br>(요일 아래, 요일 칸, 노트)</p>
       </li>
       <li class="done">
         <span class="mark"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 10h13M6.5 6.8 3.3 10l3.2 3.2M13.5 6.8 16.7 10l-3.2 3.2"/></svg></span>
@@ -783,9 +785,6 @@ function applyColumns(section, bodyEl, cols) {
 }
 
 /* 라벨을 꾹 눌러 아래로 끌면 요일 아래 메모를 적는다 */
-const SUBLABEL = {
-  pullDownPx: 14,      // 이만큼 아래로 끌면 메모 입력이 열린다
-};
 const DAY_INITIAL = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
 
 /* 칸 라벨 — 요일 칸은 "20.T", 8번째 칸은 note */
@@ -2090,8 +2089,7 @@ const App = {
     const gutter = document.createElement('div');
     gutter.className = 'cell-gutter';
 
-    const label = document.createElement('button');
-    label.type = 'button';
+    const label = document.createElement('div');
     label.className = 'cell-label';
     label.textContent = cellLabel(key, this.monday);
 
@@ -2105,38 +2103,11 @@ const App = {
     section.appendChild(listEl);
 
     {
-      /* 살짝 누르면 항목 추가, 꾹 눌러 아래로 끌면 요일 아래 메모 */
-      let g = null, skipClick = false;
-      label.addEventListener('pointerdown', e => {
-        label.setPointerCapture(e.pointerId);
-        g = { id: e.pointerId, x: e.clientX, y: e.clientY, pulled: false };
-      });
-      label.addEventListener('pointermove', e => {
-        if (!g || e.pointerId !== g.id || g.pulled) return;
-        if (e.clientY - g.y >= SUBLABEL.pullDownPx &&
-            e.clientY - g.y > Math.abs(e.clientX - g.x)) {
-          g.pulled = true;
-          haptic(true);
-          this.openSublabel(key, gutter, sub);
-        }
-      });
-      /* 입력창은 pointerup이 아니라 click에서 연다.
-         터치에서는 브라우저가 click 시점에 버튼에 포커스를 주는데, pointerup에서
-         열면 방금 focus()한 입력창이 그 click에 포커스를 빼앗겨 곧바로 닫힌다.
-         (데스크톱은 mousedown에서 포커스가 가므로 이 순서 문제가 드러나지 않았다.) */
-      label.addEventListener('pointerup', e => {
-        if (!g || e.pointerId !== g.id) { skipClick = true; return; }
-        const moved = Math.hypot(e.clientX - g.x, e.clientY - g.y);
-        skipClick = g.pulled || moved >= 10;
-        g = null;
-      });
-      label.addEventListener('pointercancel', () => { g = null; skipClick = true; });
-      label.addEventListener('click', () => {
-        if (skipClick) { skipClick = false; return; }
-        this.openEntry(key, listEl);
-      });
-
-      sub.addEventListener('click', () => this.openSublabel(key, gutter, sub));
+      /* 왼쪽 여백(날짜와 그 아래)을 누르면 **요일 아래 메모**를 적는다.
+         예전에는 라벨을 살짝 눌러 항목을 만들고, 꾹 눌러 아래로 끌어 메모를 열었다.
+         둘 다 물렸다 — 누르는 자리와 적히는 자리가 어긋나 있었다 (spec §4-2).
+         지금은 **누른 자리에 적힌다**: 여백이면 메모, 칸이면 항목, note면 note. */
+      gutter.addEventListener('click', () => this.openSublabel(key, gutter, sub));
 
       /* 칸의 빈 곳을 눌러도 그 칸에 적힌다. 라벨만 누르게 하면 과녁이 너무 작다.
          항목·라벨·입력창 위는 각자의 제스처가 있으므로 건드리지 않고,
