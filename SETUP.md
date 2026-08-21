@@ -113,7 +113,32 @@ npx wrangler pages dev .
 **여기서 커스텀 이벤트는 못 본다.** 쿠키도 클라이언트 상태도 없어서
 개별 행동을 따라갈 수 없다. 그래서 행동로그는 아래를 따로 켠다.
 
-### 5-2. 행동로그 — 데이터셋 묶기
+### 5-2. 행동로그 — 계정에서 먼저 켠다
+
+⚠️ **이 단계를 건너뛰면 배포가 통째로 실패한다.** 데이터셋만 안 들어오는 게
+아니라 **사이트 갱신이 멈춘다** — Pages가 함수를 올리다 막히기 때문이다:
+
+```
+Error: Failed to publish your Function.
+Got error: You need to enable Analytics Engine.
+```
+
+Analytics Engine은 계정마다 **한 번 켜 줘야** 쓸 수 있다(베타 신청 성격).
+바인딩을 먼저 걸고 안 켜 두면 그 순간부터 배포가 전부 빨간불이 된다.
+**켜는 것이 먼저, 바인딩이 나중이다.**
+
+1. `https://dash.cloudflare.com/<계정ID>/workers/analytics-engine` 로 간다
+   (Workers & Pages → 왼쪽 **Analytics Engine** 으로도 같은 데가 나온다)
+2. **Enable / Set up** 버튼을 누른다. 한 번이면 끝이고 돈은 안 든다.
+
+**배포가 이미 실패해 있다면** 사이트는 마지막으로 성공한 배포를 계속 내보내고
+있다 — 즉 **최근에 고친 것이 아직 안 올라가 있다.** 켠 뒤 Deployments에서
+**Retry deployment**를 눌러 초록불을 먼저 되찾을 것.
+
+켜는 것이 막히면(계정에 따라 안 보이거나 403이 나는 경우가 있다)
+**바인딩을 지우면 배포는 곧바로 초록불이 된다.** 로그만 없을 뿐 앱은 멀쩡하다.
+
+### 5-3. 행동로그 — 데이터셋 묶기
 
 **Workers & Pages → clear-week → Settings → Bindings → Add → Analytics Engine.**
 
@@ -128,7 +153,7 @@ npx wrangler pages dev .
 
 데이터셋은 미리 만들지 않는다 — 첫 이벤트가 도착할 때 저절로 생긴다.
 
-### 5-3. 읽을 토큰 만들기
+### 5-4. 읽을 토큰 만들기
 
 **My Profile → API Tokens → Create Token → Create Custom Token.**
 
@@ -153,7 +178,7 @@ node tools/stats.mjs --days 30
 export CW_LOG_EXCLUDE=기기ID1,기기ID2
 ```
 
-### 5-4. 끄고 싶으면
+### 5-5. 끄고 싶으면
 
 - **잠깐 끄기**: 대시보드에서 Bindings의 `CLEARWEEK_LOG`를 지운다. 앱은 그대로 돈다.
 - **아예 끄기**: `index.html`의 `LOG.enabled = false`.
