@@ -1351,6 +1351,42 @@ console.log('\n── 방문자 행동로그 ──');
   await ctx.close();
 }
 
+/* 사파리에만 있는 `interrupted` — 다른 앱이 소리를 가져가거나 화면이 꺼지면
+   여기로 빠진다. `suspended`만 보고 깨우면 한 번 끊긴 뒤로 영영 조용하다.
+   크로미움은 이 상태를 만들지 않으므로 흉내 낸 상자로 잰다 (spec §4-5). */
+{
+  const 깨우나 = state => page.evaluate(st => {
+    const real = Sound.ctx;
+    let called = 0;
+    Sound.ctx = { state: st, resume() { called++; return Promise.resolve(); } };
+    Sound.resume();
+    Sound.ctx = real;
+    return called;
+  }, state);
+  check('suspended면 깨운다', await 깨우나('suspended'), 1);
+  check('interrupted면 깨운다 — 사파리가 여기로 빠진다', await 깨우나('interrupted'), 1);
+  check('closed여도 두드려는 본다', await 깨우나('closed'), 1);
+  check('이미 running이면 건드리지 않는다', await 깨우나('running'), 0);
+  check('상자가 없으면 조용히 넘어간다', await page.evaluate(() => {
+    const real = Sound.ctx; Sound.ctx = null;
+    let threw = false;
+    try { Sound.resume(); } catch (e) { threw = true; }
+    Sound.ctx = real; return threw;
+  }), false);
+  /* 한 번 깨웠다고 귀를 떼면 나중에 끊겼을 때 되살릴 사람이 없다 */
+  check('깨어난 뒤에도 손짓마다 다시 깨울 채비가 되어 있다', await page.evaluate(() => {
+    const real = Sound.resume;
+    let called = 0;
+    Sound.resume = () => { called++; };
+    document.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    document.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    Sound.resume = real;
+    return called >= 2;
+  }), true);
+  /* 무음 스위치를 무시할지는 손잡이 하나로 정한다 — 기본은 존중 */
+  check('무음은 기본으로 존중한다', await page.evaluate(() => SOUND.ignoreSilent), false);
+}
+
 console.log('\n── 확대 차단 ──');
 check('확대 제스처 preventDefault', await page.evaluate(() =>
   ['gesturestart', 'gesturechange', 'gestureend'].every(t => {

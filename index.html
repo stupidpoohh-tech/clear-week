@@ -576,6 +576,12 @@ const SOUND = {
   keyHz: 2400,           // 톡 소리의 중심 주파수 (Hz). 낮추면 둔탁해짐
   keyQ: 1.2,             // 좁히면 '삑'에 가까워지고 그만큼 작게 들린다
   keyMs: 26,             // 한 번 톡 하는 길이 (ms). 늘리면 톡이 아니라 쉭이 된다
+
+  /* **아이폰·아이패드는 무음이면 Web Audio를 통째로 막는다.** 영상·음악(미디어
+     요소)은 무음에서도 나지만 Web Audio는 '주변음' 갈래라 벨소리 스위치를 따른다.
+     `true`로 두면 사파리에 재생 갈래로 바꿔 달라고 해서 무음이어도 소리가 난다.
+     **기본은 꺼 둔다** — 무음으로 해 둔 사람에게 사각사각 소리를 내는 것은 무례하다. */
+  ignoreSilent: false,
 };
 
 /* ── 방문자 행동로그 ───────────────────────────────────────
@@ -1241,6 +1247,10 @@ const Sound = {
     if (this.ctx || !SOUND.enabled) return;
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
+    /* 무음 스위치를 무시하려면 소리를 내기 **전에** 갈래를 정해야 한다 */
+    if (SOUND.ignoreSilent && navigator.audioSession) {
+      try { navigator.audioSession.type = 'playback'; } catch (e) { /* 사파리 밖 */ }
+    }
     this.ctx = new AC();
 
     const len = Math.floor(this.ctx.sampleRate * 2);
@@ -1302,24 +1312,26 @@ const Sound = {
     src.stop(now + len + 0.02);
   },
 
-  resume() { if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume(); },
+  /* 사파리에는 표준에 없는 `interrupted` 상태가 있다 — 다른 앱이 소리를 가져가거나,
+     화면이 꺼지거나, 탭이 뒤로 넘어가면 여기로 빠진다.
+     `suspended`만 보고 깨우면 **한 번 끊긴 뒤로는 영영 조용하다.** */
+  resume() {
+    if (!this.ctx || this.ctx.state === 'running') return;
+    const p = this.ctx.resume();
+    if (p && p.catch) p.catch(() => {});      // 손짓 밖에서 부르면 거절당한다
+  },
 
   /* 소리는 사람이 화면을 건드린 뒤에만 날 수 있다(브라우저 규칙).
      긋기를 시작할 때 처음 깨우면 그 첫 획이 통째로 조용하다.
      그래서 아무 데나 처음 누르는 순간 미리 깨워 둔다. 한 번이면 된다. */
   unlock() {
-    const wake = () => {
-      this.init();
-      this.resume();
-      if (this.ctx && this.ctx.state === 'running') off();
-    };
-    const off = () => {
-      ['pointerdown', 'touchend', 'keydown'].forEach(t =>
-        document.removeEventListener(t, wake, true));
-    };
+    /* **귀를 떼지 않는다.** 한 번 깨웠다고 손을 놓으면, 나중에 `interrupted`로
+       빠졌을 때 되살릴 사람이 없다. `resume()`은 이미 깨어 있으면 곧바로
+       돌아오므로 손짓마다 불러도 값이 없다. */
+    const wake = () => { this.init(); this.resume(); };
     ['pointerdown', 'touchend', 'keydown'].forEach(t =>
       document.addEventListener(t, wake, true));
-    /* 앱을 다시 열면 잠들어 있다 */
+    /* 앱을 다시 열면 잠들어 있거나 끊겨 있다 */
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') this.resume();
     });
