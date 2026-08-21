@@ -2198,7 +2198,7 @@ const App = {
     const max = key === 'free' ? 1 : AUTO_SPLIT.maxColumns;
     for (let cols = 1; cols < max; cols++) {
       applyColumns(cell.section, cell.listEl, cols);
-      if (this.hiddenCount(cell) === 0) return cols;
+      if (this.hiddenCount(cell, true) === 0) return cols;
     }
     applyColumns(cell.section, cell.listEl, max);
     return max;
@@ -2232,16 +2232,23 @@ const App = {
   /* ── 넘친 항목 — 데이터엔 있는데 칸 밖이라 안 보이는 것들 ──
      한 주가 한 화면이라 칸 높이가 고정이고, 넘치면 잘린다.
      잘렸다는 사실만 알린다. 숨기거나 줄이지 않는다 — 칸을 나누면 사라진다. */
-  hiddenCount(cell) {
+  hiddenCount(cell, withEntry) {
     const box = cell.listEl.getBoundingClientRect();
     if (box.height < 1) return 0;
+    const over = el => {
+      const r = el.getBoundingClientRect();
+      if (r.width < 1 && r.height < 1) return true;       // 아예 배치되지 못함
+      return r.bottom > box.bottom + 1 || r.right > box.right + 1;
+    };
     let n = 0;
-    cell.items.forEach(item => {
-      if (item.el.hidden) return;
-      const r = item.el.getBoundingClientRect();
-      if (r.width < 1 && r.height < 1) { n++; return; }   // 아예 배치되지 못함
-      if (r.bottom > box.bottom + 1 || r.right > box.right + 1) n++;
-    });
+    cell.items.forEach(item => { if (!item.el.hidden && over(item.el)) n++; });
+    /* 열을 맞출 때는 **적는 중인 입력창도 자리를 차지한다.** 안 세면 열이 안 나뉘고,
+       그러면 브라우저가 입력창을 보이려고 칸을 굴려 적힌 것들을 밀어낸다 (spec §4-1).
+       잘렸다는 `+N` 표시에는 넣지 않는다 — 그건 항목 이야기다. */
+    if (withEntry) {
+      const entry = cell.listEl.querySelector('.entry');
+      if (entry && over(entry)) n++;
+    }
     return n;
   },
 
@@ -2611,7 +2618,29 @@ const App = {
     typeSound(input);
 
     listEl.appendChild(input);
-    input.focus();
+    /* 넣은 다음에 열을 다시 맞춘다 — 입력창이 들어갈 자리를 먼저 만들어야
+       브라우저가 칸을 굴리지 않는다. */
+    this.refreshCell(dayKey);
+    this.focusInCell(input, listEl);
+  },
+
+  /* `.cell-body`는 `overflow: hidden`이지만 **굴러가기는 한다.**
+     포커스를 주면 브라우저가 입력창을 보이려고 칸을 굴려, 적힌 것들이
+     위(또는 옆)로 밀려 사라진다. 되돌릴 손잡이도 없다.
+     굴리지 말라고 이르고, 혹시 굴렀으면 되돌린다 (spec §4-1). */
+  focusInCell(input, listEl) {
+    input.focus({ preventScroll: true });
+    const box = listEl.getBoundingClientRect();
+    const r = input.getBoundingClientRect();
+    if (r.bottom <= box.bottom + 1 && r.right <= box.right + 1) {
+      listEl.scrollTop = 0;                 // 자리를 얻었다 — 굴릴 이유가 없다
+      listEl.scrollLeft = 0;
+      return;
+    }
+    /* 칸이 정말 꽉 차 입력창이 자리를 못 얻었다(3단이 한계).
+       그때는 굴리는 편이 낫다 — 안 보이는 채로 적게 두는 것보다는.
+       닫으면 `close()`가 다시 0으로 돌린다. */
+    input.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   },
 
   /* ── 요일 아래 메모 — 6.5pt 세미볼드 ─────────────────────── */
@@ -2689,7 +2718,7 @@ const App = {
 
     item.el.hidden = true;
     listEl.insertBefore(input, item.el);
-    input.focus();
+    this.focusInCell(input, listEl);
     input.setSelectionRange(input.value.length, input.value.length);
   },
 

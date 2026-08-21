@@ -352,6 +352,47 @@ check('입력창 닫힘', await page.locator('.entry').count(), 0);
   await page.evaluate(() => { App.week.days.sat = App.week.days.sat.slice(0, 1); App.save(); App.render(); });
   await page.waitForTimeout(250);
 }
+
+/* `.cell-body`는 `overflow: hidden`이지만 **굴러가기는 한다.** 포커스를 주면
+   브라우저가 입력창을 보이려고 칸을 굴려, 적힌 것들이 밀려 사라졌다.
+   되돌릴 손잡이도 없다 — 적은 것이 사라진 것처럼 보인다 (spec §4-1). */
+{
+  await page.evaluate(() => {
+    const n = Date.now();
+    /* 한 열이 딱 차는 개수여야 한다 — 남으면 입력창이 다음 단에 들어가 안 드러난다 */
+    App.week.days.sun = ['하나', '둘', '셋'].map((t, i) =>
+      ({ id: 'full' + i, text: t, struck: false, createdAt: n + i, updatedAt: n + i, strikes: [] }));
+    App.save(); App.render();
+  });
+  await page.waitForTimeout(400);
+  const 보이는 = () => page.evaluate(() => {
+    const c = App.cells.sun, box = c.listEl.getBoundingClientRect();
+    return c.items.filter(i => {
+      const r = i.el.getBoundingClientRect();
+      return r.width > 1 && r.bottom > box.top + 1 && r.top < box.bottom - 1 &&
+             r.right > box.left + 1 && r.left < box.right - 1;
+    }).length;
+  });
+  check('적기 전에는 셋 다 보인다', await 보이는(), 3);
+  const r = await page.evaluate(() => {
+    const b = App.cells.sun.items[0].el.getBoundingClientRect();
+    return { x: b.x, y: b.y, w: b.width, h: b.height };
+  });
+  await page.mouse.click(r.x + r.w - 8, r.y + r.h / 2);
+  await page.waitForTimeout(400);
+  check('입력창을 열어도 적힌 것이 밀려나지 않는다', await 보이는(), 3);
+  check('칸이 굴러가지 않는다', await page.evaluate(() =>
+    [App.cells.sun.listEl.scrollTop, App.cells.sun.listEl.scrollLeft]), [0, 0]);
+  check('입력창도 자리를 얻는다', await page.evaluate(() => {
+    const c = App.cells.sun, box = c.listEl.getBoundingClientRect();
+    const e = c.listEl.querySelector('.entry').getBoundingClientRect();
+    return e.bottom <= box.bottom + 1 && e.right <= box.right + 1;
+  }), true);
+  await page.locator('#weekTitle').click();
+  await page.waitForTimeout(250);
+  await page.evaluate(() => { App.week.days.sun = []; App.save(); App.render(); });
+  await page.waitForTimeout(250);
+}
 {
   const it = await cell(5).locator('.item-text').first().boundingBox();
   await page.mouse.click(it.x + 3, it.y + it.height / 2);
