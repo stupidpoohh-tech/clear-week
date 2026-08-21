@@ -178,7 +178,11 @@ async function strikeFirst(key) {
 console.log('\n── 첫 실행 안내 ──');
 /* 버튼이 하나도 없는 화면이라 첫 단서가 필요하다. 단, 한 번 거절하면 다시 안 뜬다 */
 check('첫 실행에 안내가 뜬다', await page.locator('#guide').isVisible(), true);
-check('설명은 다섯 마디', await page.locator('.guide-hint').count(), 5);
+check('설명은 일곱 마디', await page.locator('.guide-hint').count(), 7);
+check('요일 칸마다 하나씩, 머리말에 하나', await page.evaluate(() => ({
+  칸: document.querySelectorAll('.guide-hint:not(.under)').length,
+  머리말: document.querySelectorAll('.guide-hint.under').length,
+})), { 칸: 6, 머리말: 1 });
 check('설명이 서로 겹치지 않는다', await page.evaluate(() => {
   const rs = Array.from(document.querySelectorAll('.guide-hint')).map(e => e.getBoundingClientRect());
   let hit = 0;
@@ -190,9 +194,50 @@ check('설명이 서로 겹치지 않는다', await page.evaluate(() => {
 }), 0);
 check('설명이 요일 열을 넘지 않는다', await page.evaluate(() => {
   const right = document.querySelector('.days').getBoundingClientRect().right;
-  return Array.from(document.querySelectorAll('.guide-hint'))
+  /* 머리말을 가리키는 마디만 note 칸에 산다 — 위에 놓을 자리가 없어서다 */
+  return Array.from(document.querySelectorAll('.guide-hint:not(.under)'))
     .filter(e => e.getBoundingClientRect().right > right + 1).length;
 }), 0);
+/* 머리말 마디는 note 칸 안에 있고 화면 밖으로 나가지 않는다 */
+check('계정 설명이 note 칸 안에 있다', await page.evaluate(() => {
+  const e = document.querySelector('.guide-hint.under').getBoundingClientRect();
+  const f = App.cells.free.listEl.getBoundingClientRect();
+  return e.left >= f.left - 1 && e.right <= Math.min(f.right, innerWidth) + 1;
+}), true);
+check('계정 설명이 note에 적힌 것을 가리지 않는다', await page.evaluate(() => {
+  const e = document.querySelector('.guide-hint.under').getBoundingClientRect();
+  return App.cells.free.items.some(i => {
+    const r = i.el.getBoundingClientRect();
+    return r.height > 0 && e.top < r.bottom - 1;
+  });
+}), false);
+check('사람 표시에 동그라미가 둘린다', await page.evaluate(() => {
+  const b = document.getElementById('acctBtn').getBoundingClientRect();
+  return Array.from(document.querySelectorAll('.guide-ring')).some(g => {
+    const r = g.getBoundingClientRect();
+    return r.left <= b.left + 1 && r.right >= b.right - 1 && r.top <= b.top + 1;
+  });
+}), true);
+
+/* 로그인으로 무엇이 되는지와, 없어도 된다는 것을 둘 다 말한다 */
+{
+  const 글 = () => page.evaluate(() =>
+    Array.from(document.querySelectorAll('.guide-hint')).map(e => e.textContent).join(' / '));
+  const 켜짐 = await 글();
+  check('로그인하면 기기끼리 맞춰진다고 알린다', /로그인하면.*폰과 PC/.test(켜짐), true);
+  check('로그인 없이도 된다고 알린다', /로그인 없이도 전부 됩니다/.test(켜짐), true);
+  check('사람 표시가 무엇인지 알린다', /사람 표시/.test(켜짐), true);
+
+  /* 서버가 없으면 로그인 버튼이 아예 안 나타난다 (spec §13) —
+     그때는 안내도 로그인을 입에 담으면 안 된다 */
+  await page.evaluate(() => { Sync.ready = false; App.renderAuth(); });
+  await page.waitForTimeout(120);
+  const 꺼짐 = await 글();
+  check('서버가 없으면 로그인을 안내하지 않는다', /로그인/.test(꺼짐), false);
+  check('그래도 이 기기에 남는다는 말은 한다', /이 기기에 남습니다/.test(꺼짐), true);
+  await page.evaluate(() => { Sync.ready = true; App.renderAuth(); });
+  await page.waitForTimeout(120);
+}
 check('표본 주가 그려진다', await page.evaluate(() => App.week.days.thu.map(i => i.text)),
   ['낭만백수달', '영상편집']);
 check('표본은 저장하지 않는다', await page.evaluate(() =>

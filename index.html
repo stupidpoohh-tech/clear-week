@@ -904,6 +904,16 @@ const GUIDE_HINTS = [
     verb: '꾹 누른다', tail: '0.5초. 그 항목이 지워집니다' },
   { at: ['cell', 'fri'], plain: true,
     tail: '그은 것은 사라지지 않고 그 자리에 남습니다. 칸은 적은 만큼 저절로 나뉩니다.' },
+  /* 머리말의 사람 표시 — 요일 칸이 아니라 위를 가리키는 유일한 마디.
+     `verb`·`tail`이 함수면 그릴 때 값을 매긴다: 서버가 없으면 로그인 버튼이
+     아예 안 나타나므로 (spec §13) 없는 것을 안내하지 않는다. */
+  { at: ['el', 'acctBtn'], ring: true, under: true,
+    verb: '사람 표시',
+    tail: () => (Sync.ready ? '백업 · 로그인 · 쓰는 법' : '백업 · 쓰는 법') },
+  { at: ['cell', 'sat'], plain: true,
+    tail: () => (Sync.ready
+      ? '로그인 없이도 전부 됩니다 — 적은 것은 이 기기에 남습니다. 로그인하면 폰과 PC가 같은 주를 봅니다.'
+      : '적은 것은 이 기기에 남습니다. 백업으로 다른 기기에 옮길 수 있습니다.') },
 ];
 
 function markGuideSeen() {
@@ -2466,6 +2476,9 @@ const App = {
       ? Sync.email + ' · 자동으로 맞춰집니다'
       : on ? '메일로 받은 여섯 자리를 넣으세요 · 없으면 코드 받기'
            : '이 기기에만 저장됩니다');
+    /* 안내는 서버가 있는지 알기 전에 먼저 뜬다(`/api/me`는 나중에 온다).
+       답이 오면 로그인을 말하는 마디를 다시 그린다 — 없는 것을 안내하지 않게. */
+    if (this.guideOn) this.layoutGuideHints();
   },
 
   openGuide() {
@@ -2489,6 +2502,8 @@ const App = {
   },
 
   guideAnchor(at) {
+    /* 요일 칸이 아니라 머리말의 단추를 가리키는 경우 */
+    if (at[0] === 'el') return document.getElementById(at[1]);
     const cell = this.cells[at[1]];
     if (!cell) return null;
     if (at[0] === 'label') return cell.section.querySelector('.cell-label');
@@ -2534,6 +2549,9 @@ const App = {
     if (!daysEl) return;
     const daysRight = daysEl.getBoundingClientRect().right;
 
+    /* 글은 그릴 때 정한다 — 서버 유무에 따라 달라지는 마디가 있다 */
+    const val = v => (typeof v === 'function' ? v() : v);
+
     GUIDE_HINTS.forEach(h => {
       const anchor = this.guideAnchor(h.at);
       if (!anchor) return;
@@ -2541,26 +2559,44 @@ const App = {
       let left = h.plain ? r.left : r.right + 10;
       let top = h.plain ? r.top + 6 : r.top - 2;
       let width = daysRight - left - 6;
+
+      /* 머리말을 가리키는 마디는 오른쪽에 놓을 자리가 없다.
+         note 칸의 적힌 것 아래로 내리고, 화살표를 오른쪽 끝에 두어 위를 가리킨다. */
+      if (h.under) {
+        const free = this.cells.free;
+        const box = free && free.listEl.getBoundingClientRect();
+        const rows = free ? free.items.filter(i => !i.el.hidden) : [];
+        const below = rows.length
+          ? rows[rows.length - 1].el.getBoundingClientRect().bottom
+          : (box ? box.top : r.bottom);
+        left = box ? box.left : r.right - 150;
+        width = box ? box.width - 4 : 150;
+        top = Math.max(r.bottom + 8, below + 14);
+      }
       /* 오른쪽에 자리가 없으면(좁은 화면) 그 아랫줄로 내린다.
-         요일 열 밖으로 삐져나가면 note 칸 글자와 겹친다. */
-      if (!h.plain && width < 104) {
+         요일 열 밖으로 삐져나가면 note 칸 글자와 겹친다.
+         이미 자리를 정한 `under`는 건드리지 않는다 — 이 규칙이 덮으면
+         머리말 마디가 note 글자 위로 되돌아간다. */
+      if (!h.plain && !h.under && width < 104) {
         left = r.left;
         top = r.bottom + 2;
         width = daysRight - left - 6;
       }
 
       const el = document.createElement('div');
-      el.className = 'guide-hint' + (h.plain ? ' plain' : '');
+      el.className = 'guide-hint' + (h.plain ? ' plain' : '') + (h.under ? ' under' : '');
       el.style.left = Math.round(left) + 'px';
       el.style.top = Math.round(top) + 'px';
       el.style.width = Math.round(Math.max(60, width)) + 'px';
       if (h.plain) {
-        el.appendChild(document.createElement('span')).textContent = h.tail;
+        el.appendChild(document.createElement('span')).textContent = val(h.tail);
       } else {
-        el.appendChild(document.createElement('i')).textContent = '←';
+        /* 아래에 붙는 마디는 화살표가 뒤에 온다 — 오른쪽 끝에서 위를 가리키게 */
+        if (!h.under) el.appendChild(document.createElement('i')).textContent = '←';
         const span = el.appendChild(document.createElement('span'));
-        span.appendChild(document.createElement('b')).textContent = h.verb;
-        span.appendChild(document.createTextNode(' — ' + h.tail));
+        span.appendChild(document.createElement('b')).textContent = val(h.verb);
+        span.appendChild(document.createTextNode(' — ' + val(h.tail)));
+        if (h.under) el.appendChild(document.createElement('i')).textContent = '↑';
       }
       wrap.appendChild(el);
 
