@@ -176,97 +176,71 @@ async function strikeFirst(key) {
   await page.mouse.up(); await page.waitForTimeout(400);
 }
 console.log('\n── 첫 실행 안내 ──');
-/* 버튼이 하나도 없는 화면이라 첫 단서가 필요하다. 단, 한 번 거절하면 다시 안 뜬다 */
+/* 버튼이 하나도 없는 화면이라 첫 단서가 필요하다. 단, 한 번 거절하면 다시 안 뜬다.
+   표본 주를 그리고 셀로판지를 덧대던 방식은 물렸다 — 지금은 카드 한 장이다 (spec §4-4). */
 check('첫 실행에 안내가 뜬다', await page.locator('#guide').isVisible(), true);
-check('설명은 일곱 마디', await page.locator('.guide-hint').count(), 7);
-check('요일 칸마다 하나씩, 머리말에 하나', await page.evaluate(() => ({
-  칸: document.querySelectorAll('.guide-hint:not(.under)').length,
-  머리말: document.querySelectorAll('.guide-hint.under').length,
-})), { 칸: 6, 머리말: 1 });
-check('설명이 서로 겹치지 않는다', await page.evaluate(() => {
-  const rs = Array.from(document.querySelectorAll('.guide-hint')).map(e => e.getBoundingClientRect());
-  let hit = 0;
-  for (let i = 0; i < rs.length; i++) for (let j = i + 1; j < rs.length; j++) {
-    const a = rs[i], b = rs[j];
-    if (a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom) hit++;
-  }
-  return hit;
-}), 0);
-check('설명이 요일 열을 넘지 않는다', await page.evaluate(() => {
-  const right = document.querySelector('.days').getBoundingClientRect().right;
-  /* 머리말을 가리키는 마디만 note 칸에 산다 — 위에 놓을 자리가 없어서다 */
-  return Array.from(document.querySelectorAll('.guide-hint:not(.under)'))
-    .filter(e => e.getBoundingClientRect().right > right + 1).length;
-}), 0);
-/* 머리말 마디는 사람 표시 바로 아래에서 시작하고, 화살표가 그 밑에 선다.
-   note 칸만 쓰면 다섯 줄로 접히므로 왼쪽으로 벌리되 화면은 넘지 않는다. */
-check('계정 설명이 사람 표시 아래에 붙는다', await page.evaluate(() => {
-  const e = document.querySelector('.guide-hint.under').getBoundingClientRect();
-  const b = document.getElementById('acctBtn').getBoundingClientRect();
-  return { 아래에: e.top > b.bottom, 오른끝맞춤: Math.abs(e.right - b.right) <= 2,
-           화면안: e.left >= 0 && e.right <= innerWidth + 1 };
-}), { 아래에: true, 오른끝맞춤: true, 화면안: true });
-check('계정 설명은 두 줄을 넘지 않는다', await page.evaluate(() => {
-  const e = document.querySelector('.guide-hint.under');
-  return e.getBoundingClientRect().height <= parseFloat(getComputedStyle(e).lineHeight) * 2 + 2;
-}), true);
-/* note 칸 예시는 지웠다 — 설명하는 마디가 없어 배울 것이 없었다 */
-check('note 칸에는 예시를 두지 않는다', await page.evaluate(() => App.week.days.free.length), 0);
-check('사람 표시에 동그라미가 둘린다', await page.evaluate(() => {
-  const b = document.getElementById('acctBtn').getBoundingClientRect();
-  return Array.from(document.querySelectorAll('.guide-ring')).some(g => {
-    const r = g.getBoundingClientRect();
-    return r.left <= b.left + 1 && r.right >= b.right - 1 && r.top <= b.top + 1;
-  });
+check('네 줄', await page.locator('.guide-list li:not([hidden])').count(), 4);
+check('줄마다 표시 하나씩', await page.evaluate(() =>
+  Array.from(document.querySelectorAll('.guide-list li:not([hidden])'))
+    .filter(li => !li.querySelector('.mark svg')).length), 0);
+
+/* 줄바꿈(<br>)은 textContent에 공백을 남기지 않는다 — 한 칸으로 세운다 */
+const 안내글 = () => page.evaluate(() =>
+  Array.from(document.querySelectorAll('.guide-list li:not([hidden]) p'))
+    .map(e => e.innerHTML.replace(/<br\s*\/?>/g, ' ').replace(/<[^>]+>/g, '')
+                         .replace(/\s+/g, ' ').trim()));
+check('네 가지를 이 차례로 말한다', await 안내글(), [
+  '빈 곳이나 날짜를 눌러 새로 생성',
+  '글자 위를 그어서 완료. 문지르면 지워져요',
+  '꾹 누르면 삭제',
+  '로그인하면 기기간 연동할 수 있습니다',
+]);
+check('중요한 말은 굵게', await page.evaluate(() =>
+  Array.from(document.querySelectorAll('.guide-list li:not([hidden]) b')).map(e => e.textContent)),
+  ['새로 생성', '완료', '삭제', '기기간 연동']);
+
+/* 안내는 카드일 뿐이다 — 주간 표를 건드리지 않는다.
+   예전에는 표본 주를 끼워 넣느라 저장·동기화를 멈춰 세워야 했다. */
+check('주간 표를 건드리지 않는다', await page.evaluate(() =>
+  Object.values(App.week.days).reduce((n, a) => n + a.length, 0)), 0);
+check('안내가 떠 있어도 저장·동기화를 멈추지 않는다',
+  await page.evaluate(() => App.currentWeek() !== null), true);
+check('카드가 화면 안에 들어온다', await page.evaluate(() => {
+  const c = document.querySelector('.guide-card').getBoundingClientRect();
+  return c.top >= 0 && c.bottom <= innerHeight && c.left >= 0 && c.right <= innerWidth;
 }), true);
 
-/* 로그인으로 무엇이 되는지와, 없어도 된다는 것을 둘 다 말한다 */
-{
-  const 글 = () => page.evaluate(() =>
-    Array.from(document.querySelectorAll('.guide-hint')).map(e => e.textContent).join(' / '));
-  const 켜짐 = await 글();
-  check('로그인하면 기기끼리 맞춰진다고 알린다', /로그인하면.*폰과 PC/.test(켜짐), true);
-  check('로그인 안 해도 된다고 알린다', /로그인은 안 해도 됩니다/.test(켜짐), true);
-  check('백업이 있다는 것도 알린다', /백업/.test(켜짐), true);
-  /* 가리키는 것의 이름을 부르지 않는다 — 화살표와 동그라미가 이미 가리킨다.
-     한때 '사람 표시 — 백업 · 로그인 · 쓰는 법'이라고 적었는데, 그건 설명이
-     아니라 메뉴 목록이었다. 다른 마디처럼 눌러서 무엇이 되는지만 말한다. */
-  check('가리키는 것의 이름을 부르지 않는다', /사람 표시|아이콘|버튼/.test(켜짐), false);
-  check('메뉴를 늘어놓지 않는다', /백업 · 로그인|로그인 · 쓰는 법/.test(켜짐), false);
+/* 서버가 없으면 로그인 버튼이 아예 안 나타난다 (spec §13) — 그 줄도 빠진다 */
+await page.evaluate(() => { Sync.ready = false; App.renderAuth(); });
+await page.waitForTimeout(120);
+check('서버가 없으면 로그인 줄이 빠진다',
+  await page.locator('.guide-list li:not([hidden])').count(), 3);
+check('서버가 없으면 로그인을 입에 담지 않는다',
+  (await 안내글()).join(' ').includes('로그인'), false);
+await page.evaluate(() => { Sync.ready = true; App.renderAuth(); });
+await page.waitForTimeout(120);
+check('서버가 있으면 로그인 줄이 돌아온다',
+  await page.locator('.guide-list li:not([hidden])').count(), 4);
 
-  /* 서버가 없으면 로그인 버튼이 아예 안 나타난다 (spec §13) —
-     그때는 안내도 로그인을 입에 담으면 안 된다 */
-  await page.evaluate(() => { Sync.ready = false; App.renderAuth(); });
-  await page.waitForTimeout(120);
-  const 꺼짐 = await 글();
-  check('서버가 없으면 로그인을 안내하지 않는다', /로그인/.test(꺼짐), false);
-  check('그래도 이 기기에 남는다는 말은 한다', /이 기기에 남습니다/.test(꺼짐), true);
-  await page.evaluate(() => { Sync.ready = true; App.renderAuth(); });
-  await page.waitForTimeout(120);
-}
-check('표본 주가 그려진다', await page.evaluate(() => App.week.days.thu.map(i => i.text)),
-  ['낭만백수달', '영상편집']);
-check('표본은 저장하지 않는다', await page.evaluate(() =>
-  localStorage.getItem('clearweek:' + App.week.weekId)), null);
-check('셀로판지가 주간 표를 덮는다', await page.evaluate(() => {
-  const s = document.getElementById('guideSheet').getBoundingClientRect();
-  const b = document.getElementById('weekBody').getBoundingClientRect();
-  return s.left <= b.left && s.right >= b.right && s.top <= b.top && s.height > 100;
-}), true);
-check('모서리가 접혀 있다', await page.evaluate(() =>
-  (document.querySelector('#guideSheet .flap').getAttribute('d') || '').length > 10), true);
-await page.mouse.click(195, 120);
+/* 닫는 길이 둘 — 카드 밖을 누르거나 닫기를 누르거나 */
+await page.mouse.click(195, 30);
 await page.waitForTimeout(200);
-check('아무 데나 누르면 닫힌다', await page.locator('#guide').isVisible(), false);
+check('카드 밖을 누르면 닫힌다', await page.locator('#guide').isVisible(), false);
 await page.reload(); await page.waitForTimeout(400);
-check('닫기만 했으면 다음에 다시 뜬다', await page.locator('#guide').isVisible(), true);
-await page.locator('#guideNever').click();
+check('그냥 닫았으면 다음에 다시 뜬다', await page.locator('#guide').isVisible(), true);
+await page.locator('#guideClose').click();
+await page.waitForTimeout(200);
+check('닫기로도 닫힌다', await page.locator('#guide').isVisible(), false);
+await page.reload(); await page.waitForTimeout(400);
+check('체크하지 않았으면 또 뜬다', await page.locator('#guide').isVisible(), true);
+
+/* 체크하고 닫아야 영영 안 뜬다 */
+await page.locator('#guideNever').check();
+await page.locator('#guideClose').click();
 await page.waitForTimeout(200);
 check('다시 보지 않기 — 그 자리에서 닫힘', await page.locator('#guide').isVisible(), false);
 await page.reload(); await page.waitForTimeout(400);
 check('다시 보지 않기 — 새로고침해도 안 뜸', await page.locator('#guide').isVisible(), false);
-check('닫으면 표본이 사라진다', await page.evaluate(() =>
-  Object.values(App.week.days).reduce((n, a) => n + a.length, 0)), 0);
 
 console.log('\n── 화면 ──');
 check('8칸(요일 7 + note)', await page.locator('.cell').count(), 8);
