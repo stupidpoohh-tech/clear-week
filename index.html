@@ -76,7 +76,10 @@
   header {
     flex: none;
     display: flex;
-    align-items: baseline;
+    /* 안쪽 두 무리가 이미 가운데 정렬이라, 머리말도 가운데로 맞춘다.
+       기준선(baseline)으로 두면 글자 없는 표시가 첫 자식일 때 아래쪽에서
+       기준선을 지어내 머리말이 3px 두꺼워진다 — 한 화면짜리 표가 그만큼 준다. */
+    align-items: center;
     justify-content: space-between;
     padding-bottom: 8px;
     border-bottom: 1px solid var(--rule);
@@ -1284,22 +1287,32 @@ const Sound = {
   /* 사람이 껐으면 아무것도 내지 않는다. `SOUND.enabled`는 만든 사람의 스위치 */
   live() { return SOUND.enabled && this.on; },
 
+  /* 재생 갈래는 잡고만 있어도 남의 앱 소리를 가로챈다. 끌 때 놓아 준다. */
+  claimAudio(want) {
+    if (!SOUND.ignoreSilent || !navigator.audioSession) return;
+    try { navigator.audioSession.type = want ? 'playback' : 'auto'; } catch (e) { /* 사파리 밖 */ }
+  },
+
+  /* 켜면 깨어나기를 기다릴 수 있게 약속을 돌려준다 — 사파리는 곧바로 깨지 않는다 */
   setOn(v) {
     this.on = !!v;
     try { localStorage.setItem(SOUND_KEY, this.on ? 'on' : 'off'); } catch (e) { Store.fail(); }
-    if (this.on) { this.init(); this.resume(); return; }   // 누른 순간이라 깨울 수 있다
+    if (this.on) {
+      this.claimAudio(true);
+      this.init();
+      return this.resume();                  // 누른 순간이라 깨울 수 있다
+    }
     this.silence();
+    this.claimAudio(false);
     if (this.ctx && this.ctx.suspend) this.ctx.suspend().catch(() => {});
+    return Promise.resolve();
   },
 
   init() {
     if (this.ctx || !this.live()) return;
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
-    /* 무음 스위치를 무시하려면 소리를 내기 **전에** 갈래를 정해야 한다 */
-    if (SOUND.ignoreSilent && navigator.audioSession) {
-      try { navigator.audioSession.type = 'playback'; } catch (e) { /* 사파리 밖 */ }
-    }
+    this.claimAudio(true);      // 갈래는 상자를 만들기 **전에** 정해야 먹는다
     this.ctx = new AC();
 
     const len = Math.floor(this.ctx.sampleRate * 2);
@@ -1364,10 +1377,14 @@ const Sound = {
   /* 사파리에는 표준에 없는 `interrupted` 상태가 있다 — 다른 앱이 소리를 가져가거나,
      화면이 꺼지거나, 탭이 뒤로 넘어가면 여기로 빠진다.
      `suspended`만 보고 깨우면 **한 번 끊긴 뒤로는 영영 조용하다.** */
+  /* **꺼 둔 동안에는 깨우지 않는다.** 이 문이 없으면 끈 다음 아무 데나 한 번
+     누르는 순간 `setOn(false)`의 `suspend()`가 풀린다 — 소리는 `live()`가 막지만
+     재생 갈래(`playback`)를 붙든 채라 **남의 앱 소리를 계속 가로챈다.** */
   resume() {
-    if (!this.ctx || this.ctx.state === 'running') return;
+    if (!this.live() || !this.ctx || this.ctx.state === 'running') return Promise.resolve();
     const p = this.ctx.resume();
-    if (p && p.catch) p.catch(() => {});      // 손짓 밖에서 부르면 거절당한다
+    if (p && p.catch) { p.catch(() => {}); return p; }   // 손짓 밖에서 부르면 거절당한다
+    return Promise.resolve();
   },
 
   /* 소리는 사람이 화면을 건드린 뒤에만 날 수 있다(브라우저 규칙).
@@ -2375,10 +2392,12 @@ const App = {
     Sound.load();
     paint();
     b.addEventListener('click', () => {
-      Sound.setOn(!Sound.on);
+      const on = !Sound.on;
+      /* 켠 순간 한 번 들려 준다 — 켜졌다는 것을 귀로 확인시킨다.
+         **깨어난 뒤에 내야 한다.** 사파리는 갓 만든 상자도 `resume()`도
+         곧바로 `running`이 되지 않아서, 바로 부르면 `key()`가 그냥 물러난다. */
+      Sound.setOn(on).then(() => { if (Sound.on) Sound.key(); });
       paint();
-      /* 켠 순간 한 번 들려 준다 — 켜졌다는 것을 귀로 확인시킨다 */
-      if (Sound.on) Sound.key();
     });
   },
 

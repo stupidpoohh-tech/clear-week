@@ -1398,6 +1398,9 @@ console.log('\n── 방문자 행동로그 ──');
       말: b.getAttribute('aria-label'),
     };
   });
+  /* 글자 없는 표시가 첫 자식이 되면 기준선이 지어져 머리말이 두꺼워진다 */
+  check('머리말이 두꺼워지지 않았다', await page.evaluate(() =>
+    Math.round(document.querySelector('header').getBoundingClientRect().height) <= 45), true);
   check('스피커는 계정 표시 왼쪽에 있다', await page.evaluate(() => {
     const s = document.getElementById('soundBtn').getBoundingClientRect();
     const a = document.getElementById('acctBtn').getBoundingClientRect();
@@ -1420,13 +1423,25 @@ console.log('\n── 방문자 행동로그 ──');
 
   /* 꺼져 있으면 아무 소리도 만들지 않는다 */
   check('꺼져 있으면 소리 상자를 만들지도 않는다', await page.evaluate(() => {
-    const had = !!Sound.ctx;
+    const real = Sound.ctx;           // 꺼져 있으면 init()으로는 못 되살린다 — 손에 쥐고 돌려준다
     Sound.ctx = null;
     Sound.init();
     const made = !!Sound.ctx;
-    if (had) Sound.init();
+    Sound.ctx = real;
     return made;
   }), false);
+
+  /* 껐는데 다음 손짓이 다시 깨우면 재생 갈래를 붙든 채로 남는다 */
+  check('꺼 둔 동안에는 손짓이 깨우지 않는다', await page.evaluate(() => {
+    const real = Sound.ctx;
+    let resumed = 0;
+    Sound.ctx = { state: 'suspended', resume() { resumed++; return Promise.resolve(); } };
+    Sound.resume();                                    // 곧바로 불러도
+    document.dispatchEvent(new Event('pointerdown', { bubbles: true }));   // 손짓으로도
+    document.dispatchEvent(new Event('touchend', { bubbles: true }));
+    Sound.ctx = real;
+    return resumed;
+  }), 0);
 
   await page.reload();
   await page.waitForTimeout(500);
@@ -1434,6 +1449,17 @@ console.log('\n── 방문자 행동로그 ──');
   await page.locator('#soundBtn').click();
   await page.waitForTimeout(200);
   check('다시 누르면 켜진다', (await 상태()).on, true);
+  check('켜면 손짓이 다시 깨운다', await page.evaluate(() => {
+    const real = Sound.ctx;
+    let resumed = 0;
+    Sound.ctx = { state: 'suspended', resume() { resumed++; return Promise.resolve(); } };
+    document.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    Sound.ctx = real;
+    return resumed;
+  }), 1);
+  /* 켠 순간의 톡은 깨어난 뒤에 나야 한다 — 사파리는 곧바로 running이 아니다 */
+  check('켜기는 깨어남을 기다릴 약속을 돌려준다', await page.evaluate(() =>
+    typeof Sound.setOn(true).then === 'function'), true);
   check('켜면 기억도 바뀐다', await page.evaluate(() => localStorage['clearweek:sound']), 'on');
 }
 
