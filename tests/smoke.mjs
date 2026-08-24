@@ -649,6 +649,138 @@ check('가로 드래그로 긋기', await page.evaluate(() => App.week.days.thu.
 check('획은 시드+비율로 저장', await page.evaluate(() =>
   Object.keys(App.week.days.thu[0].strikes[0]).sort()), ['a', 'b', 'line', 'seed']);
 
+console.log('\n── 여백에서 시작한 긋기 ──');
+/* 실제 사용에서 사람들은 글자 왼쪽, 날짜가 있는 여백에서부터 손을 긋기 시작한다.
+   거기서 시작한 손짓이 버려지면 "안 그어지는" 앱이 된다 (spec §4-2, 2026-08-24) */
+{
+  const seed = texts => page.evaluate(list => {
+    const now = Date.now();
+    App.week.days.sat = list.map((text, i) => ({
+      id: 'gut' + i, text, struck: false, createdAt: now + i, updatedAt: now + i, strikes: [],
+    }));
+    App.week.notes.sat = '회식'; App.week.noteAt.sat = now;
+    App.week.noteStrikes.sat = [];
+    App.save(); App.render();
+  }, texts);
+  const spot = i => page.evaluate(n => {
+    const r = App.cells.sat.items[n].el.getBoundingClientRect();
+    const g = App.cells.sat.gutter.getBoundingClientRect();
+    return { x: g.x + 6, y: r.top + r.height / 2, endX: r.right - 6 };
+  }, i);
+  const strikes = () => page.evaluate(() => App.week.days.sat.map(i => i.strikes.length));
+
+  await seed(['메일 보내기', '은행']);
+  await page.waitForTimeout(350);
+  {
+    const g = await spot(0);
+    await page.mouse.move(g.x, g.y); await page.mouse.down();
+    for (let i = 1; i <= 16; i++) { await page.mouse.move(g.x + (g.endX - g.x) * (i / 16), g.y); await page.waitForTimeout(8); }
+    await page.mouse.up(); await page.waitForTimeout(400);
+  }
+  check('여백에서 시작해도 그어진다', await strikes(), [1, 0]);
+  check('그때 항목 입력창도 메모도 안 열린다',
+    await page.locator('.entry, .sublabel-entry').count(), 0);
+  check('여백에서 시작해도 메모는 안 건드린다', await page.evaluate(() =>
+    [App.week.notes.sat, App.week.noteStrikes.sat.length]), ['회식', 0]);
+
+  /* **잉크는 글자에서부터 나온다.** 손가락이 지나온 여백까지 그려지면
+     날짜 위로 줄이 지나간다. 자동 긋기와 같은 만큼(2px)만 삐져나간다. */
+  check('잉크가 여백으로 넘어오지 않는다', await page.evaluate(() => {
+    const it = App.cells.sat.items[0];
+    const rec = it.data.strikes[0];
+    const w = Math.max(1, it.textEl.getClientRects()[0].width);
+    const pad = STROKE.overshoot / w + 0.001;
+    return rec.a >= -pad && rec.b <= 1 + pad;
+  }), true);
+
+  /* 여백의 롱프레스는 **항목 삭제가 아니다** — 가로로 움직여야 넘긴다 */
+  await seed(['메일 보내기', '은행']);
+  await page.waitForTimeout(350);
+  {
+    const g = await spot(1);
+    await page.mouse.move(g.x, g.y); await page.mouse.down();
+    await page.waitForTimeout(800);
+    await page.mouse.up(); await page.waitForTimeout(350);
+  }
+  check('여백에서 꾹 눌러도 항목은 안 지워진다', await days('sat'), ['메일 보내기', '은행']);
+  await page.keyboard.press('Escape');
+  await page.locator('#weekTitle').click();
+  await page.waitForTimeout(300);
+
+  /* 넘겨받은 손짓은 **이미 긋기로 판정된 것**이다. 도중에 손이 멎어도
+     삭제로 바뀌면 안 된다 — 판정 문턱(8px)을 갓 넘긴 자리에서 쉬는 경우다.
+     넘길 때 롱프레스를 아예 걸지 않는 이유 (spec §4-2). */
+  {
+    const g = await spot(1);
+    await page.mouse.move(g.x, g.y); await page.mouse.down();
+    await page.mouse.move(g.x + 9, g.y);      // 문턱을 갓 넘긴다 — 넘어간다
+    await page.waitForTimeout(800);           // 그 자리에서 쉰다
+    await page.mouse.up(); await page.waitForTimeout(350);
+  }
+  check('넘겨받은 뒤 손이 멎어도 삭제로 바뀌지 않는다',
+    await days('sat'), ['메일 보내기', '은행']);
+
+  /* 세로 우세도 넘기지 않는다 — 이 방향은 아직 비어 있는 자리다 */
+  {
+    const g = await spot(0);
+    await page.mouse.move(g.x, g.y); await page.mouse.down();
+    for (let i = 1; i <= 10; i++) { await page.mouse.move(g.x + 2, g.y + i * 4); await page.waitForTimeout(8); }
+    await page.mouse.up(); await page.waitForTimeout(350);
+  }
+  check('여백에서 시작한 세로 드래그는 긋지 않는다', await strikes(), [0, 0]);
+
+  /* 그어진 줄이면 지우개다. 여백에서 시작해도 같다 */
+  await page.evaluate(() => {
+    App.week.days.sat[0].strikes = [{ line: 0, a: 0.01, b: 0.98, seed: 1074304443 }];
+    App.week.days.sat[0].struck = true;
+    App.save(); App.render();
+  });
+  await page.waitForTimeout(350);
+  {
+    const g = await spot(0);
+    await page.mouse.move(g.x, g.y); await page.mouse.down();
+    for (let n = 0; n < 5; n++) {
+      for (let i = 1; i <= 14; i++) {
+        const t = n % 2 ? 1 - i / 14 : i / 14;
+        await page.mouse.move(g.x + (g.endX - g.x) * t, g.y); await page.waitForTimeout(5);
+      }
+    }
+    await page.mouse.up(); await page.waitForTimeout(500);
+  }
+  check('여백에서 시작해도 지우개가 된다', await strikes(), [0, 0]);
+
+  /* 나뉜 칸에서는 왼쪽 단부터 — 여백에서 오는 손이 먼저 닿는 쪽이다 */
+  await seed(['하나', '둘', '셋', '넷', '다섯', '여섯']);
+  await page.waitForTimeout(400);
+  check('칸이 나뉘었다', await page.evaluate(() =>
+    Number(App.cells.sat.listEl.style.columnCount) > 1), true);
+  {
+    const g = await page.evaluate(() => {
+      const r = App.cells.sat.items[0].el.getBoundingClientRect();
+      const q = App.cells.sat.gutter.getBoundingClientRect();
+      return { x: q.x + 6, y: r.top + r.height / 2, endX: r.right - 4, left: r.left };
+    });
+    /* 같은 높이에 오른쪽 단 항목도 있다 — 왼쪽 것이 그어져야 한다 */
+    check('같은 높이에 오른쪽 단 항목도 있다', await page.evaluate(y =>
+      App.cells.sat.items.filter(it => {
+        const r = it.el.getBoundingClientRect();
+        return y >= r.top && y <= r.bottom;
+      }).length, g.y), 2);
+    await page.mouse.move(g.x, g.y); await page.mouse.down();
+    for (let i = 1; i <= 16; i++) { await page.mouse.move(g.x + (g.endX - g.x) * (i / 16), g.y); await page.waitForTimeout(8); }
+    await page.mouse.up(); await page.waitForTimeout(400);
+  }
+  check('나뉜 칸에서는 왼쪽 단이 그어진다',
+    await page.evaluate(() => App.week.days.sat.map(i => i.strikes.length)), [1, 0, 0, 0, 0, 0]);
+
+  await page.evaluate(() => {
+    App.week.days.sat = []; App.week.notes.sat = '';
+    App.week.noteStrikes.sat = []; App.week.noteAt.sat = Date.now();
+    App.save(); App.render();
+  });
+  await page.waitForTimeout(300);
+}
+
 console.log('\n── 지우개는 어중간한 상태를 남기지 않는다 ──');
 /* 양 끝은 문대는 손이 되돌아가는 자리라 한 번밖에 안 지나간다.
    그래서 늘 잔흔이 남았다 — 손을 뗄 때 결판을 낸다. */

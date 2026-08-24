@@ -1556,7 +1556,10 @@ class StrikeItem {
   }
 
   /* ── 제스처 ──────────────────────────────────────────────── */
-  onDown(e) {
+  /* from — **여백에서 시작한 손짓을 넘겨받을 때**의 원래 시작점 (spec §4-2).
+     이미 가로로 움직인 것이 확인된 뒤에 오므로 롱프레스는 걸지 않는다:
+     여백에서 꾹 누르는 것은 항목 삭제가 아니다. */
+  onDown(e, from) {
     if (this.status === 'animating' || this.pointer) return;
     Sound.init();
     Sound.resume();
@@ -1566,13 +1569,14 @@ class StrikeItem {
       id: e.pointerId,
       rowRect: this.el.getBoundingClientRect(),
       rects: lineRects(this.textEl),
-      startX: e.clientX, startY: e.clientY,
+      startX: from ? from.x : e.clientX,
+      startY: from ? from.y : e.clientY,
       lastX: e.clientX, lastY: e.clientY, lastT: e.timeStamp,
       moved: 0, speed: 0,
       mode: null,               // null | draw | erase | scroll
       active: null, grain: null, seed: 0,
       dirX: 0, trail: null, trailStroke: null, trailD: '', passTouched: null,
-      longPress: setTimeout(() => {
+      longPress: from ? null : setTimeout(() => {
         const p = this.pointer;
         if (!p) return;
         p.longPress = null;
@@ -1582,6 +1586,8 @@ class StrikeItem {
         this.el.classList.add('purging');
       }, STROKE.longPressMs),
     };
+    /* 넘겨받은 손은 이미 저만치 가 있다 — 지나온 만큼을 바로 반영한다 */
+    if (from) this.onMove(e);
   }
 
   onMove(e) {
@@ -1710,6 +1716,11 @@ class StrikeItem {
     p.originX = p.startX - p.rowRect.left;
     p.originY = p.startY;
     p.minX = Infinity; p.maxX = -Infinity;
+    /* **잉크는 글자에서부터 나온다.** 여백에서 시작한 손짓은 손가락이 글자에
+       닿기 전까지 아무것도 남기지 않는다 — 안 그러면 날짜 위로 줄이 지나간다.
+       오른쪽 삐져나감은 자동 긋기와 같은 만큼만 허용한다 (spec §4-2). */
+    p.drawMin = p.lineLeft - STROKE.overshoot;
+    p.drawMax = p.lineRight + STROKE.overshoot;
 
     const el = document.createElementNS(NS, 'path');
     el.setAttribute('fill', STROKE.inkColor);
@@ -1722,7 +1733,7 @@ class StrikeItem {
   addSample(p, clientX, clientY) {
     const s = p.active;
     if (!s) return;
-    const x = clientX - p.rowRect.left;
+    const x = clamp(clientX - p.rowRect.left, p.drawMin, p.drawMax);
     const g = p.grain;
     const fingerDy = (clientY - p.originY) * STROKE.followY;
     const wBase = STROKE.widthMax -
@@ -2224,6 +2235,32 @@ const App = {
           Math.hypot(e.clientX - from.x, e.clientY - from.y) < 10;
       });
       section.addEventListener('pointercancel', () => { spot = null; openOnClick = false; });
+
+      /* **여백에서 그어도 인식한다** (spec §4-2). 사람들은 글자 왼쪽,
+         날짜가 있는 여백에서부터 손을 긋기 시작한다 — 실제 사용에서 그랬다.
+         거기서 시작한 손짓이 통째로 버려지면 "안 그어지는" 앱이 된다.
+         **가로로 움직인 것이 분명해지는 순간** 그 높이의 항목에게 넘긴다.
+         그전에는 넘기지 않는다 — 여백의 롱프레스는 항목 삭제가 아니고,
+         세로 우세는 여기서 쓰는 손짓이 아니다. 메모 글자 위는 메모의 자리다. */
+      if (key !== 'free') {
+        let hand = null;
+        const letGo = () => { hand = null; };
+        gutter.addEventListener('pointerdown', e => {
+          hand = e.target.closest('.sublabel')
+            ? null : { id: e.pointerId, x: e.clientX, y: e.clientY };
+        });
+        section.addEventListener('pointermove', e => {
+          if (!hand || e.pointerId !== hand.id) return;
+          const dx = e.clientX - hand.x, dy = e.clientY - hand.y;
+          if (Math.abs(dx) < STROKE.slopPx || Math.abs(dx) <= Math.abs(dy)) return;
+          const from = hand;
+          hand = null;
+          const item = this.itemAtY(key, from.y);
+          if (item) item.onDown(e, from);
+        });
+        section.addEventListener('pointerup', letGo);
+        section.addEventListener('pointercancel', letGo);
+      }
       section.addEventListener('click', () => {
         if (!openOnClick) return;
         openOnClick = false;
@@ -2285,6 +2322,21 @@ const App = {
     this.week.noteAt[key] = Date.now();
     this.save();
     this.updateOverflow(key);
+  },
+
+  /* 그 높이에 놓인 항목. 칸이 여러 단이면 **왼쪽 단부터** —
+     여백에서 오는 손이 먼저 닿는 쪽이다. */
+  itemAtY(key, y) {
+    const cell = this.cells[key];
+    if (!cell) return null;
+    let best = null, bestLeft = Infinity;
+    for (const item of cell.items) {
+      if (item.el.hidden) continue;
+      const r = item.el.getBoundingClientRect();
+      if (r.height < 1 || y < r.top || y > r.bottom || r.left >= bestLeft) continue;
+      bestLeft = r.left; best = item;
+    }
+    return best;
   },
 
   makeItem(data, dayKey, listEl) {
