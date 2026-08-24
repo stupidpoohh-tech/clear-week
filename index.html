@@ -6,9 +6,16 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Clear Week">
+<!-- 홈 화면 앱 상단 바 — 흰색으로 고정한다.
+     `default`는 iOS가 "적절히" 정하는데, 다크모드 기기에서는 남색으로 나온다.
+     `theme-color`를 라이트/다크 둘 다 흰색으로 못박고, 상태바를 `default`로
+     두어야 아이콘/글자가 검게 나온다 — 흰 바탕엔 검은 아이콘. -->
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="theme-color" content="#ffffff">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: dark)">
 <meta name="color-scheme" content="light">
+<meta name="supported-color-schemes" content="light">
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="icon" href="icon-512.png" sizes="512x512">
 <link rel="manifest" href="manifest.webmanifest">
@@ -45,7 +52,11 @@
      요소에 hidden을 걸어도 안 숨는다 — .item · .backup · .account .row 에서 세 번 밟았다.
      한 줄로 원천 차단한다. 숨기려면 hidden 하나면 되게. */
   [hidden] { display: none !important; }
-  html { height: 100%; background: var(--paper); touch-action: none; }
+  html {
+    height: 100%; min-height: 100dvh;
+    background: var(--paper);          /* 노치·다이내믹아일랜드 뒤까지 흰색 */
+    touch-action: none;
+  }
   body {
     position: fixed; inset: 0; overflow: hidden;   /* 페이지 스크롤 없음 */
     touch-action: none;                            /* 확대·더블탭 확대 차단 */
