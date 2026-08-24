@@ -1831,6 +1831,236 @@ console.log('\n── 방문자 행동로그 ──');
   check('켜면 기억도 바뀐다', await page.evaluate(() => localStorage['clearweek:sound']), 'on');
 }
 
+console.log('\n── 캘린더 연결 ──');
+/* 같은 사람이 만든 다른 웹앱(Dada Calendar)과 **새로 적은 일정만** 오간다 (spec §15).
+   저쪽은 Firebase다. 여기서는 그 REST 세 곳을 가로채 흉내 낸다 —
+   진짜 프로젝트 없이도 오가는 모양과 규칙을 전부 잴 수 있다. */
+{
+  const cal = { entries: new Map(), created: [], queries: [], token: 0, refreshed: 0, fail: null };
+  const doc = (id, f) => ({ name: 'projects/p/databases/(default)/documents/users/u1/entries/' + id,
+                            fields: f });
+  /* 이 앱이 보내는 모양 그대로 되읽는다 — 타입 표기를 진짜처럼 벗긴다 */
+  const unwrap = v => {
+    if (!v || typeof v !== 'object') return null;
+    if ('stringValue' in v) return v.stringValue;
+    if ('booleanValue' in v) return v.booleanValue;
+    if ('integerValue' in v) return Number(v.integerValue);
+    if ('nullValue' in v) return null;
+    if ('arrayValue' in v) return (v.arrayValue.values || []).map(unwrap);
+    if ('mapValue' in v) return plain(v.mapValue.fields || {});
+    return null;
+  };
+  const plain = f => Object.fromEntries(Object.keys(f).map(k => [k, unwrap(f[k])]));
+  const wrap = v => {
+    if (v === null || v === undefined) return { nullValue: null };
+    if (typeof v === 'string') return { stringValue: v };
+    if (typeof v === 'boolean') return { booleanValue: v };
+    if (typeof v === 'number') return { integerValue: String(v) };
+    if (Array.isArray(v)) return { arrayValue: { values: v.map(wrap) } };
+    return { mapValue: { fields: Object.fromEntries(Object.keys(v).map(k => [k, wrap(v[k])])) } };
+  };
+  const seed = (id, over = {}) => cal.entries.set(id, Object.assign({
+    kind: 'task', title: '', color: 'blue', tags: [], note: '', location: '',
+    startDate: '', startTime: null, endDate: null, endTime: null,
+    recurrence: null, ymSpan: [], isRecurring: false,
+    task: { status: 'planned', important: false, urgent: false, order: 0 },
+    money: null, createdAt: '', updatedAt: '',
+  }, over));
+
+  const json = (route, body, status = 200) => route.fulfill({
+    status, contentType: 'application/json', body: JSON.stringify(body),
+    headers: { 'access-control-allow-origin': '*' },
+  });
+
+  await page.route('https://identitytoolkit.googleapis.com/**', async route => {
+    const body = JSON.parse(route.request().postData() || '{}');
+    if (body.password !== 'good') return json(route, { error: { message: 'INVALID_PASSWORD' } }, 400);
+    return json(route, { localId: 'u1', email: body.email,
+                         idToken: 'tok0', refreshToken: 'ref0', expiresIn: '3600' });
+  });
+  await page.route('https://securetoken.googleapis.com/**', async route => {
+    cal.refreshed++;
+    return json(route, { id_token: 'tok' + (++cal.token), refresh_token: 'ref0' });
+  });
+  await page.route('https://firestore.googleapis.com/**', async route => {
+    const url = route.request().url();
+    const body = JSON.parse(route.request().postData() || '{}');
+    if (cal.fail) { const s = cal.fail; cal.fail = null; return json(route, { error: { message: 'nope' } }, s); }
+
+    if (url.includes(':runQuery')) {
+      const want = body.structuredQuery.where.fieldFilter.value.arrayValue.values.map(v => v.stringValue);
+      cal.queries.push({ want, auth: route.request().headers().authorization || '' });
+      const out = [];
+      for (const [id, f] of cal.entries) {
+        if ((f.ymSpan || []).some(m => want.includes(m))) out.push({ document: doc(id, Object.fromEntries(Object.keys(f).map(k => [k, wrap(f[k])]))) });
+      }
+      return json(route, out.length ? out : [{ readTime: 'x' }]);
+    }
+    const m = /documentId=([^&]+)/.exec(url);
+    const id = m ? decodeURIComponent(m[1]) : '?';
+    if (cal.entries.has(id)) {
+      return json(route, { error: { message: 'ALREADY_EXISTS: ' + id, status: 'ALREADY_EXISTS' } }, 409);
+    }
+    const f = plain(body.fields || {});
+    cal.entries.set(id, f);
+    cal.created.push({ id, f });
+    return json(route, { name: 'projects/p/databases/(default)/documents/users/u1/entries/' + id });
+  });
+
+  const wipeWeek = () => page.evaluate(() => {
+    DAY_KEYS.forEach(k => { App.week.days[k] = []; App.week.notes[k] = ''; });
+    App.week.graves = {};
+    App.save(); App.render();
+  });
+  /* 이 주 월요일 기준 날짜 — 검사는 실제로 도는 날에 맞춰 스스로 계산한다 */
+  const isoOf = key => page.evaluate(k => dayDateISO(App.monday, k), key);
+  const dayTexts = key => page.evaluate(k => App.week.days[k].map(i => i.text), key);
+  const settle = () => page.evaluate(() => Cal.run());
+
+  /* 설정이 없으면 이 기능은 없는 것이다 (spec §13과 같은 규칙) */
+  await page.locator('#acctBtn').click();
+  await page.waitForTimeout(250);
+  check('설정이 없으면 캘린더 줄이 아예 없다', await page.evaluate(() =>
+    [document.getElementById('calRow').hidden, document.getElementById('calAuthRow').hidden]),
+    [true, true]);
+
+  await page.evaluate(() => { CAL.apiKey = 'test-key'; CAL.projectId = 'test-proj'; App.renderCal(); });
+  await page.waitForTimeout(150);
+  check('설정이 있으면 캘린더 줄이 나타난다', await page.evaluate(() =>
+    document.getElementById('calRow').hidden), false);
+  check('잇기 전 안내', await page.evaluate(() =>
+    document.getElementById('calMsg').textContent), '이으면 새로 적은 일정이 오갑니다');
+
+  /* 틀린 비밀번호는 사람 말로 알린다 — 조용히 실패하지 않는다 */
+  await page.locator('#calBtn').click();
+  await page.locator('#calEmail').fill('me@example.com');
+  await page.locator('#calPw').fill('nope');
+  await page.locator('#calGo').click();
+  await page.waitForTimeout(400);
+  check('틀린 비밀번호는 사람 말로', await page.evaluate(() =>
+    document.getElementById('calMsg').textContent), '비밀번호가 다릅니다');
+  check('그때 이어지지 않는다', await page.evaluate(() => Cal.linked()), false);
+
+  /* 이 주에 있는 캘린더 항목들을 심어 둔다 */
+  await wipeWeek();
+  const tueISO = await isoOf('tue');
+  const wedISO = await isoOf('wed');
+  await page.evaluate(() => { App.week.days.mon = []; App.save(); });
+  seed('e-real', { title: '캘린더에서 적음', startDate: tueISO, ymSpan: [tueISO.slice(0, 7)] });
+  seed('e-done', { title: '이미 끝낸 일', startDate: tueISO, ymSpan: [tueISO.slice(0, 7)],
+                   task: { status: 'done', important: false, urgent: false, order: 0 } });
+  seed('e-idea', { kind: 'idea', title: '아이디어 단문', startDate: wedISO, ymSpan: [wedISO.slice(0, 7)] });
+  seed('e-money', { kind: 'money', title: '월세', startDate: wedISO, ymSpan: [wedISO.slice(0, 7)] });
+  seed('e-rep', { title: '매주 회의', startDate: wedISO, ymSpan: [wedISO.slice(0, 7)], isRecurring: true,
+                  recurrence: { freq: 'weekly', interval: 1, until: null, count: null } });
+
+  /* Clear Week 쪽에도 하나 적어 둔다 — 양방향을 한 번에 잰다 */
+  await page.evaluate(() => {
+    const now = Date.now();
+    App.week.days.mon = [{ id: 'a1', text: 'Clear Week에서 적음', struck: false,
+      createdAt: now, updatedAt: now, strikes: [] }];
+    App.save(); App.render();
+  });
+  await page.waitForTimeout(250);
+
+  await page.locator('#calPw').fill('good');
+  await page.locator('#calGo').click();
+  await page.waitForFunction(() => Cal.linked(), null, { timeout: 5000 });
+  await page.waitForTimeout(700);
+  check('이으면 주소가 잡힌다', await page.evaluate(() => [Cal.linked(), Cal.email]),
+    [true, 'me@example.com']);
+
+  check('캘린더의 할 일이 그 요일에 생긴다', await dayTexts('tue'), ['캘린더에서 적음']);
+  check('끝낸 일·아이디어·가계부·반복은 안 온다', await dayTexts('wed'), []);
+  check('Clear Week에서 적은 것이 캘린더에 생긴다',
+    cal.created.map(c => [c.id, c.f.title, c.f.startDate]),
+    [['cw-a1', 'Clear Week에서 적음', await isoOf('mon')]]);
+  check('저쪽 규칙이 요구하는 자리를 다 채운다', (() => {
+    const f = cal.created[0].f;
+    return [f.kind, f.isRecurring, Array.isArray(f.tags), Array.isArray(f.ymSpan),
+            f.ymSpan[0], f.task.status, f.money, f.endDate];
+  })(), ['task', false, true, true, (await isoOf('mon')).slice(0, 7), 'planned', null, null]);
+  check('그 주가 걸친 달만 묻는다', cal.queries[0].want,
+    Array.from(new Set([await isoOf('mon'), await isoOf('sun')].map(d => d.slice(0, 7)))));
+  check('토큰을 달고 묻는다', /^Bearer /.test(cal.queries[0].auth), true);
+
+  /* 몇 번을 맞춰도 같은 것이 두 번 생기지 않는다 — id를 서로에게서 유도하기 때문 */
+  const madeOnce = cal.created.length;
+  await settle(); await settle();
+  await page.waitForTimeout(300);
+  check('두 번 맞춰도 캘린더에 두 번 안 생긴다', cal.created.length, madeOnce);
+  check('두 번 맞춰도 Clear Week에 두 번 안 생긴다', await dayTexts('tue'), ['캘린더에서 적음']);
+  check('저쪽에서 온 것은 되돌려 보내지 않는다',
+    cal.created.some(c => c.id.startsWith('cw-dc-')), false);
+
+  /* 지운 것은 되살아나지 않는다 — 무덤이 그래서 있다 */
+  await page.evaluate(() => {
+    const it = App.cells.tue.items.find(i => String(i.data.id).startsWith('dc-'));
+    App.removeItem(it, 'tue');
+  });
+  await page.waitForTimeout(250);
+  await settle();
+  await page.waitForTimeout(300);
+  check('Clear Week에서 지운 것은 다시 안 생긴다', await dayTexts('tue'), []);
+
+  /* 그어진 것은 안 보낸다 — 끝난 일을 저쪽에 "할 일"로 새로 만들 이유가 없다.
+     이게 없으면 지난 주를 열어 보기만 해도 다 끝낸 일이 우수수 생긴다. */
+  await page.evaluate(() => {
+    const now = Date.now();
+    App.week.days.thu = [{ id: 'struck1', text: '이미 그은 것', struck: true,
+      createdAt: now, updatedAt: now, strikes: [{ line: 0, a: 0, b: 1, seed: 1 }] }];
+    App.save(); App.render();
+  });
+  await page.waitForTimeout(250);
+  await settle(); await page.waitForTimeout(300);
+  check('그어진 항목은 캘린더로 안 간다',
+    cal.created.some(c => c.id === 'cw-struck1'), false);
+
+  /* note 칸은 날짜가 없어서 갈 곳이 없다 */
+  await page.evaluate(() => {
+    const now = Date.now();
+    App.week.days.free = [{ id: 'free1', text: '날짜 없는 것', struck: false,
+      createdAt: now, updatedAt: now, strikes: [] }];
+    App.save(); App.render();
+  });
+  await page.waitForTimeout(250);
+  await settle(); await page.waitForTimeout(300);
+  check('note 칸은 캘린더로 안 간다', cal.created.some(c => c.id === 'cw-free1'), false);
+
+  /* 토큰은 저장하지 않는다 — 저장하는 것은 refresh 하나뿐 */
+  check('짧은 토큰은 저장하지 않는다', await page.evaluate(() => {
+    const raw = JSON.parse(localStorage['clearweek:cal']);
+    return [Object.keys(raw).sort(), raw.uid];
+  }), [['email', 'refresh', 'uid'], 'u1']);
+
+  /* 닿지 못하면 조용히 실패하지 않는다 */
+  cal.fail = 500;
+  await settle(); await page.waitForTimeout(300);
+  check('닿지 못하면 알린다', await page.evaluate(() =>
+    document.getElementById('calMsg').textContent), '캘린더에 닿지 못했습니다');
+  check('그래도 이어진 채로 둔다', await page.evaluate(() => Cal.linked()), true);
+
+  /* 토큰이 죽었으면 끊고 알린다 — 조용히 안 되는 채로 두지 않는다 */
+  cal.fail = 401;
+  await settle(); await page.waitForTimeout(300);
+  check('토큰이 죽으면 끊고 알린다', await page.evaluate(() =>
+    [Cal.linked(), document.getElementById('calMsg').textContent]),
+    [false, '다시 연결해 주세요']);
+
+  /* 일부러 거절받아 본 절이다 — 400(틀린 비밀번호)·409(이미 있음)·500·401은
+     브라우저가 남기는 자원 로드 기록이지 앱의 오류가 아니다. **여기서만** 걷어낸다.
+     `Failed to load resource`가 아닌 진짜 오류는 그대로 남아 아래에서 걸린다. */
+  for (let i = errors.length - 1; i >= 0; i--) {
+    if (/^Failed to load resource.* status of (400|401|409|500)\b/.test(errors[i])) errors.splice(i, 1);
+  }
+
+  /* 연결을 끊으면 이 기기 기록은 그대로 둔다 */
+  await page.evaluate(() => { CAL.apiKey = ''; CAL.projectId = ''; App.renderCal(); });
+  await page.evaluate(() => { DAY_KEYS.forEach(k => { App.week.days[k] = []; }); App.week.graves = {}; App.save(); App.render(); });
+  await page.locator('#acctClose').click();
+  await page.waitForTimeout(250);
+}
+
 console.log('\n── 확대 차단 ──');
 check('확대 제스처 preventDefault', await page.evaluate(() =>
   ['gesturestart', 'gesturechange', 'gestureend'].every(t => {

@@ -475,6 +475,22 @@
         <button id="authGo" type="button">확인</button>
       </span>
     </div>
+    <div class="row" id="calRow" hidden>
+      <span class="k">캘린더</span>
+      <span class="v plain" id="calMsg"></span>
+    </div>
+    <div class="row" id="calAuthRow" hidden>
+      <span class="k">연결</span>
+      <span class="v">
+        <button id="calBtn" type="button">캘린더 잇기</button>
+        <button id="calOut" type="button" hidden>연결 끊기</button>
+        <input id="calEmail" class="auth-input" type="email" inputmode="email"
+               autocomplete="username" placeholder="캘린더 메일" hidden>
+        <input id="calPw" class="auth-input" type="password"
+               autocomplete="current-password" placeholder="비밀번호" hidden>
+        <button id="calGo" type="button" hidden>확인</button>
+      </span>
+    </div>
     <div class="row">
       <span class="k">백업</span>
       <span class="v">
@@ -636,6 +652,28 @@ const LOG = {
   flushMs: 5000,         // 모았다가 이만큼마다 한 번 보낸다 (한 손짓에 한 번씩 보내지 않게)
   maxQueue: 200,         // 서버가 죽어 있어도 메모리가 늘지 않게
   respectDNT: true,      // 추적 거부를 켠 브라우저에는 보내지 않는다
+};
+
+/* ── 캘린더 연결 (Dada Calendar) ─────────────────────────────
+   같은 사람이 만든 다른 웹앱과 **새로 적은 일정만** 오간다 (spec §15).
+   저쪽은 Firebase(Auth + Firestore)다. SDK를 넣으면 이 파일의 "외부 의존 0,
+   빌드 없음"이 깨지므로 **REST로만 말한다** — 전부 그냥 `fetch`다.
+
+   두 값은 **공개돼도 되는 것이다.** 저쪽 `.env.example`이 그렇게 적어 두었고,
+   실제 보안 경계는 캘린더 쪽 `firestore.rules`다(내 uid 아래만 읽고 쓴다).
+   **비어 있으면 이 기능이 통째로 나타나지 않는다** — 서버가 없을 때
+   로그인 버튼이 안 보이는 것과 같은 규칙이다 (spec §13). */
+const CAL = {
+  apiKey: '',            // Firebase 웹 API 키 (AIza…)
+  projectId: '',         // Firebase 프로젝트 id
+
+  /* 오가는 것은 **할 일 하나뿐이다.** 아이디어·가계부까지 들이면 금액과 단문이
+     주간표에 섞여 이 제품의 단색 표가 무너진다. 이미 끝낸 것도 안 가져온다 —
+     끝난 일이 안 그어진 줄로 나타나면 할 일이 남은 것처럼 보인다 (spec §15). */
+  kind: 'task',
+  color: 'blue',         // 저쪽에서 이 앱이 만든 것을 알아볼 수 있게
+  pushDelayMs: 1500,     // 적고 이만큼 쉬었다 보낸다
+  tokenTtlMs: 50 * 60000,// 토큰은 한 시간짜리 — 그 전에 갈아 끼운다
 };
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1082,6 +1120,16 @@ const SYNC = {
 };
 
 /* 서버가 돌려주는 이유를 사람 말로 옮긴다. 조용히 실패하지 않는다 */
+/* Firebase가 돌려주는 이유를 사람 말로 옮긴다 (spec §15) */
+const CAL_ERRORS = {
+  EMAIL_NOT_FOUND: '그 주소의 캘린더 계정이 없습니다',
+  INVALID_PASSWORD: '비밀번호가 다릅니다',
+  INVALID_LOGIN_CREDENTIALS: '메일이나 비밀번호가 다릅니다',
+  INVALID_EMAIL: '메일 주소 모양이 아닙니다',
+  USER_DISABLED: '멈춰 있는 계정입니다',
+  TOO_MANY_ATTEMPTS_TRY_LATER: '잠시 뒤에 다시 해 주세요',
+};
+
 const AUTH_ERRORS = {
   'bad-email': '메일 주소 모양이 아닙니다',
   'bad-code': '여섯 자리를 넣으세요',
@@ -1198,6 +1246,297 @@ const Sync = {
     if (!this.email) return;
     clearTimeout(this.pushTimer);
     this.pushTimer = setTimeout(() => this.push(), SYNC.pushDelayMs);
+  },
+
+  mark(text) { if (this.onChange) this.onChange(text); },
+};
+
+/* ═══════════════════════════════════════════════════════════════
+   6-2. 캘린더 연결 — Dada Calendar와 새 일정만 오간다 (spec §15)
+
+   **오가는 것은 "새로 적은 것" 하나뿐이다.** 취소선도, 고친 글자도, 지운 것도
+   건너가지 않는다. 그래서 규칙이 단순하다: 저쪽에 없으면 만들고, 있으면 둔다.
+
+   덮어쓰지 않는 것이 이 연결의 뼈대다. 항목의 id를 서로에게서 **유도해서**
+   만들기 때문에(`cw-…` / `dc-…`), 몇 번을 맞춰도 같은 것이 두 번 생기지 않는다.
+   기기가 여럿이어도 같다 — 판단할 것이 없으니 갈라질 것도 없다.
+
+   Firebase SDK를 쓰지 않는다. REST만 쓴다 — 이 파일은 빌드가 없다.
+   ═══════════════════════════════════════════════════════════════ */
+
+const CAL_KEY = STORE_PREFIX + 'cal';   // { refresh, uid, email }
+
+/* Firestore REST는 값마다 타입을 적는다. 이 앱이 쓰는 것만 옮긴다 */
+function fsVal(v) {
+  if (v === null || v === undefined) return { nullValue: null };
+  if (typeof v === 'string') return { stringValue: v };
+  if (typeof v === 'boolean') return { booleanValue: v };
+  if (typeof v === 'number') {
+    return Number.isInteger(v) ? { integerValue: String(v) } : { doubleValue: v };
+  }
+  if (Array.isArray(v)) return { arrayValue: { values: v.map(fsVal) } };
+  return { mapValue: { fields: fsFields(v) } };
+}
+function fsFields(obj) {
+  const out = {};
+  for (const k of Object.keys(obj)) out[k] = fsVal(obj[k]);
+  return out;
+}
+/* 되읽기 — 모르는 타입은 null로 둔다. 화면이 죽는 것보다 낫다 */
+function fsRead(v) {
+  if (!v || typeof v !== 'object') return null;
+  if ('stringValue' in v) return v.stringValue;
+  if ('booleanValue' in v) return !!v.booleanValue;
+  if ('integerValue' in v) return Number(v.integerValue);
+  if ('doubleValue' in v) return Number(v.doubleValue);
+  if ('nullValue' in v) return null;
+  if ('arrayValue' in v) return (v.arrayValue.values || []).map(fsRead);
+  if ('mapValue' in v) return fsPlain(v.mapValue.fields || {});
+  return null;
+}
+function fsPlain(fields) {
+  const out = {};
+  for (const k of Object.keys(fields)) out[k] = fsRead(fields[k]);
+  return out;
+}
+
+/* 'YYYY-MM-DD' — 캘린더가 쓰는 벽시계 날짜. 저쪽도 지역 시각 기준이다 */
+function dateISO(d) {
+  const p = n => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+}
+/* 그 주 월요일에서 요일 칸 하나의 날짜 */
+function dayDateISO(monday, key) {
+  const i = WEEK_DAYS.indexOf(key);
+  if (i < 0) return '';
+  const d = new Date(monday);
+  d.setDate(d.getDate() + i);
+  return dateISO(d);
+}
+/* 문서 id에 쓸 수 없는 글자를 턴다. `/`가 들어가면 경로가 되어 버린다 */
+const docSafe = v => String(v).replace(/[^A-Za-z0-9_-]/g, '');
+
+const Cal = {
+  uid: null, email: null, refresh: null,
+  token: null, tokenAt: 0,        // 토큰은 메모리에만 — 저장하는 것은 refresh뿐
+  busy: false, pending: false, timer: null,
+  host: null, onChange: null,
+
+  /* 설정이 없으면 이 기능은 없는 것이다 (spec §13과 같은 규칙) */
+  live() { return !!(CAL.apiKey && CAL.projectId); },
+  linked() { return this.live() && !!(this.uid && this.refresh); },
+
+  load() {
+    if (!this.live()) return;
+    try {
+      const raw = JSON.parse(localStorage.getItem(CAL_KEY) || 'null');
+      if (raw && raw.refresh && raw.uid) {
+        this.refresh = raw.refresh; this.uid = raw.uid; this.email = raw.email || null;
+      }
+    } catch (e) { /* 못 읽으면 안 이어진 것이다 */ }
+  },
+
+  remember() {
+    try {
+      if (this.linked()) {
+        localStorage.setItem(CAL_KEY,
+          JSON.stringify({ refresh: this.refresh, uid: this.uid, email: this.email }));
+      } else localStorage.removeItem(CAL_KEY);
+    } catch (e) { Store.fail(); }
+  },
+
+  async post(url, body, token) {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: Object.assign({ 'content-type': 'application/json' },
+        token ? { authorization: 'Bearer ' + token } : {}),
+      body: JSON.stringify(body),
+    });
+    let data = null;
+    try { data = await res.json(); } catch (e) { /* 몸통이 없을 수 있다 */ }
+    if (!res.ok) {
+      const err = (data && data.error) || {};
+      throw Object.assign(new Error(err.message || res.status),
+        { status: res.status, code: err.message || err.status || '' });
+    }
+    return data || {};
+  },
+
+  /* ── 잇기 ──────────────────────────────────────────────────
+     캘린더의 계정으로 로그인한다. Clear Week의 로그인과는 별개다 —
+     계정 체계가 서로 다르므로 하나로 합칠 수 없다 (spec §15). */
+  async link(email, password) {
+    const out = await this.post(
+      'https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=' + CAL.apiKey,
+      { email, password, returnSecureToken: true });
+    this.uid = out.localId;
+    this.email = out.email || email;
+    this.refresh = out.refreshToken;
+    this.token = out.idToken;
+    this.tokenAt = Date.now();
+    this.remember();
+  },
+
+  unlink() {
+    this.uid = null; this.email = null; this.refresh = null;
+    this.token = null; this.tokenAt = 0;
+    clearTimeout(this.timer);
+    this.remember();
+  },
+
+  /* 짧은 토큰은 들고 있지 않는다 — 필요할 때 refresh로 새로 받는다 */
+  async idToken() {
+    if (this.token && Date.now() - this.tokenAt < CAL.tokenTtlMs) return this.token;
+    const out = await this.post(
+      'https://securetoken.googleapis.com/v1/token?key=' + CAL.apiKey,
+      { grant_type: 'refresh_token', refresh_token: this.refresh });
+    this.token = out.id_token || out.access_token;
+    this.tokenAt = Date.now();
+    if (out.refresh_token && out.refresh_token !== this.refresh) {
+      this.refresh = out.refresh_token;
+      this.remember();
+    }
+    return this.token;
+  },
+
+  base() {
+    return 'https://firestore.googleapis.com/v1/projects/' + CAL.projectId
+      + '/databases/(default)/documents/users/' + this.uid;
+  },
+
+  /* ── 가져오기 ──────────────────────────────────────────────
+     보고 있는 주가 걸친 달만 묻는다. **`ymSpan` 하나로만 거른다** —
+     `kind`까지 조건에 넣으면 복합 색인이 필요해지고, 그러면 사람이
+     콘솔에서 색인을 만들어야 한다. 나머지는 여기서 걸러도 값이 안 든다. */
+  async fetchMonths(months, token) {
+    const out = await this.post(this.base() + ':runQuery', {
+      structuredQuery: {
+        from: [{ collectionId: 'entries' }],
+        where: {
+          fieldFilter: {
+            field: { fieldPath: 'ymSpan' },
+            op: 'ARRAY_CONTAINS_ANY',
+            value: { arrayValue: { values: months.map(m => ({ stringValue: m })) } },
+          },
+        },
+      },
+    }, token);
+    const rows = Array.isArray(out) ? out : [];
+    const found = [];
+    for (const row of rows) {
+      const doc = row && row.document;
+      if (!doc || !doc.name) continue;
+      const f = fsPlain(doc.fields || {});
+      found.push({ id: doc.name.slice(doc.name.lastIndexOf('/') + 1), f });
+    }
+    return found;
+  },
+
+  /* ── 보내기 ────────────────────────────────────────────────
+     **만들기만 한다.** 이미 있으면 그대로 둔다 — 저쪽에서 고쳐 놓은 것을
+     이쪽 글자로 덮으면 "새로 생성하는 것만 오간다"가 아니게 된다.
+     `documentId`로 만들면 이미 있을 때 서버가 409로 거절한다. 그게 정답이다. */
+  async create(docId, fields, token) {
+    try {
+      await this.post(this.base() + '/entries?documentId=' + encodeURIComponent(docId),
+        { fields: fsFields(fields) }, token);
+      return true;
+    } catch (e) {
+      if (e.status === 409 || String(e.code).includes('ALREADY_EXISTS')) return false;
+      throw e;
+    }
+  },
+
+  /* Clear Week 항목 하나 → 캘린더의 할 일 문서.
+     저쪽 `firestore.rules`가 요구하는 자리를 전부 채운다 — 하나라도 비면 거절된다. */
+  entryDoc(text, iso) {
+    const now = new Date().toISOString();
+    return {
+      kind: CAL.kind, title: text, note: '', color: CAL.color, tags: [], location: '',
+      startDate: iso, startTime: null, endDate: null, endTime: null,
+      recurrence: null, ymSpan: [iso.slice(0, 7)], isRecurring: false,
+      task: { status: 'planned', important: false, urgent: false, order: 0 },
+      money: null, createdAt: now, updatedAt: now,
+    };
+  },
+
+  schedule() {
+    if (!this.linked()) return;
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => this.run(), CAL.pushDelayMs);
+  },
+
+  /* 한 번에 하나만 돈다. 도는 중에 또 부르면 끝나고 한 번 더 돈다 */
+  async run() {
+    if (!this.linked() || !this.host) return;
+    if (this.busy) { this.pending = true; return; }
+    this.busy = true;
+    try {
+      await this.exchange();
+      this.mark('');
+    } catch (e) {
+      /* 토큰이 죽었으면 이어진 것이 아니다 — 조용히 끊고 알린다 */
+      if (e.status === 400 || e.status === 401) { this.unlink(); this.mark('다시 연결해 주세요'); }
+      else this.mark('캘린더에 닿지 못했습니다');
+    } finally {
+      this.busy = false;
+      if (this.pending) { this.pending = false; this.run(); }
+    }
+  },
+
+  async exchange() {
+    const week = this.host.currentWeek();
+    const monday = this.host.monday;
+    if (!week || !monday) return;
+
+    const token = await this.idToken();
+    const dates = {};                       // iso → 요일 칸
+    WEEK_DAYS.forEach(k => { dates[dayDateISO(monday, k)] = k; });
+    const months = Array.from(new Set(Object.keys(dates).map(d => d.slice(0, 7))));
+
+    const remote = await this.fetchMonths(months, token);
+    const have = new Set();
+    for (const k of WEEK_DAYS) for (const it of week.days[k]) have.add(String(it.id));
+
+    /* 캘린더 → Clear Week. 할 일이면서, 안 끝났고, 반복이 아니고, 이 주에 있는 것 */
+    let added = 0;
+    for (const { id, f } of remote) {
+      if (f.kind !== CAL.kind || f.isRecurring) continue;
+      if (f.task && f.task.status === 'done') continue;
+      const key = dates[String(f.startDate || '')];
+      if (!key) continue;
+      const localId = 'dc-' + id;
+      /* **지운 것은 되살리지 않는다.** 무덤이 그래서 있다 (spec §11) */
+      if (have.has(localId) || week.graves[localId]) continue;
+      const text = String(f.title || '').trim();
+      if (!text) continue;
+      const now = Date.now();
+      week.days[key].push({
+        id: localId, text, struck: false,
+        createdAt: now, updatedAt: now, strikes: [],
+      });
+      have.add(localId);
+      added++;
+    }
+
+    /* Clear Week → 캘린더. 저쪽에서 온 것(`dc-`)은 되돌려 보내지 않는다.
+       note 칸은 날짜가 없어서 갈 곳이 없다 — 요일 칸만 간다 (spec §15).
+
+       **그어진 것은 안 보낸다.** 위에서 끝난 일(`done`)을 안 가져오는 것과
+       같은 규칙이다. 이게 없으면 지난 주를 열어 보기만 해도 그때 다 끝낸 일이
+       캘린더에 "할 일"로 우수수 생긴다. */
+    for (const key of WEEK_DAYS) {
+      const iso = dayDateISO(monday, key);
+      for (const it of week.days[key]) {
+        const id = String(it.id);
+        if (id.startsWith('dc-') || it.struck) continue;
+        const text = String(it.text || '').trim();
+        if (!text) continue;
+        await this.create('cw-' + docSafe(id), this.entryDoc(text, iso), token);
+      }
+    }
+
+    if (added) this.host.adoptCalendar(week);
   },
 
   mark(text) { if (this.onChange) this.onChange(text); },
@@ -2049,6 +2388,7 @@ const App = {
     this.bindBackup();
     this.bindGuide();
     this.bindAuth();
+    this.bindCal();
     Sound.unlock();                // 첫 손짓에 소리를 미리 깨워 둔다
     Sync.start();
     /* 화면을 다시 켤 때가 기기를 바꾼 순간이다 — 그때 바로 맞춘다 */
@@ -2104,6 +2444,7 @@ const App = {
     this.monday = monday;
     this.week = loadWeek(isoWeekId(monday));
     this.render();
+    Cal.schedule();                // 이 주에 걸린 일정을 캘린더와 맞춘다 (spec §15)
   },
 
   save() {
@@ -2128,6 +2469,14 @@ const App = {
 
     saveWeek(week);
     this.week = loadWeek(week.weekId);
+    this.render();
+  },
+
+  /* 캘린더에서 새로 온 것이 있다 — 저장하고 다시 그린다.
+     손이 닿아 있거나 적는 중이면 그리지 않는다. 저장은 됐으니 다음에 맞는다. */
+  adoptCalendar() {
+    this.save();
+    if (Gesture.busy || document.querySelector('.entry, .sublabel-entry')) return;
     this.render();
   },
 
@@ -2523,7 +2872,10 @@ const App = {
     const open = force === undefined ? panel.hidden : force;
     if (open === !panel.hidden) return;
     panel.hidden = !open;
-    if (open) { Log.ev('account'); this.authStep = null; this.backupMsg(''); this.renderAuth(); }
+    if (open) {
+      Log.ev('account'); this.authStep = null; this.calStep = null;
+      this.backupMsg(''); this.renderAuth(); this.renderCal();
+    }
   },
 
   backupMsg(text) { document.getElementById('backupMsg').textContent = text || ''; },
@@ -2574,6 +2926,65 @@ const App = {
   /* ── 로그인 — 서랍 안에 둔다. 설정 화면은 여전히 없다 ──────
      링크가 아니라 여섯 자리 코드를 쓴다. 메일의 링크를 누르면 사파리가 열리는데,
      홈 화면 앱과 사파리는 저장소가 달라서 앱은 로그아웃인 채로 남는다. */
+  /* ── 캘린더 연결 (spec §15) ────────────────────────────────
+     Clear Week의 로그인과 **별개의 로그인**이다. 계정 체계가 서로 다르므로
+     하나로 합칠 수 없다. 설정이 없으면 이 줄은 아예 나타나지 않는다. */
+  bindCal() {
+    const el = id => document.getElementById(id);
+    Cal.host = this;
+    Cal.onChange = msg => this.renderCal(msg);
+    Cal.load();
+
+    el('calBtn').addEventListener('click', () => {
+      this.calStep = 'login';
+      this.renderCal();
+      el('calEmail').focus();
+    });
+
+    el('calOut').addEventListener('click', () => {
+      Cal.unlink();
+      this.calStep = null;
+      this.renderCal('연결을 끊었습니다 · 이 기기의 기록은 그대로 있습니다');
+    });
+
+    const go = async () => {
+      const mail = el('calEmail').value.trim();
+      const pw = el('calPw').value;
+      if (!mail || !pw) { this.renderCal('메일과 비밀번호를 넣으세요'); return; }
+      this.renderCal('잇는 중…');
+      try {
+        await Cal.link(mail, pw);
+        el('calPw').value = '';
+        this.calStep = null;
+        this.renderCal('맞추는 중…');
+        await Cal.run();
+        this.renderCal();
+      } catch (e) {
+        this.renderCal(CAL_ERRORS[e.code] || '잇지 못했습니다 · 잠시 뒤에 다시');
+      }
+    };
+    el('calGo').addEventListener('click', go);
+    el('calPw').addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
+  },
+
+  renderCal(msg) {
+    const el = id => document.getElementById(id);
+    const on = this.calStep === 'login';
+    const linked = Cal.linked();
+    /* 설정이 없으면 두 줄 다 없는 것이다 (spec §13과 같은 규칙) */
+    el('calRow').hidden = !Cal.live();
+    el('calAuthRow').hidden = !Cal.live();
+    el('calBtn').hidden = linked || on;
+    el('calOut').hidden = !linked || on;
+    el('calEmail').hidden = !on;
+    el('calPw').hidden = !on;
+    el('calGo').hidden = !on;
+    el('calMsg').textContent = msg || (linked
+      ? Cal.email + ' · 새 일정이 오갑니다'
+      : on ? '캘린더 계정으로 잇습니다 · Clear Week 로그인과 별개입니다'
+           : '이으면 새로 적은 일정이 오갑니다');
+  },
+
   bindAuth() {
     const el = id => document.getElementById(id);
     Sync.host = this;
@@ -2819,6 +3230,8 @@ const App = {
       Log.ev('add', dayKey === 'free' ? 'free' : 'day',
              text.length, this.week.days[dayKey].length);
 
+      Cal.schedule();      // 새로 적은 것만 캘린더로 간다 (spec §15)
+
       const item = this.makeItem(data, dayKey, listEl);
       listEl.insertBefore(item.el, input);    // 입력창은 늘 목록 맨 아래
       if (this.cells[dayKey]) this.cells[dayKey].items.push(item);
@@ -2933,6 +3346,7 @@ const App = {
       item.data.text = text;
       item.data.updatedAt = Date.now();
       Log.ev('edit', dayKey === 'free' ? 'free' : 'day', text.length);
+      Cal.schedule();
       item.textEl.textContent = text;
       this.save();
       item.el.hidden = false;                 // 제자리에 그대로 둔다
