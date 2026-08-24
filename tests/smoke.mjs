@@ -1996,7 +1996,7 @@ console.log('\n── 캘린더 (자동 연결) ──');
 /* 로그인 하나로 두 앱이 이어진다 (spec §11, 2026-08-24). 별도의 "캘린더 연결"
    화면이 없다 — Sync에 로그인하면 그 순간부터 캘린더도 오간다. */
 {
-  const cal = { entries: new Map(), created: [], queries: [], fail: null };
+  const cal = { entries: new Map(), created: [], deleted: [], queries: [], fail: null };
   const doc = (id, f) => ({ name: 'projects/p/databases/(default)/documents/users/uid-'
     + Sync_email() + '/entries/' + id, fields: f });
   const Sync_email = () => 'auto@example.com';  // 이 절에서 쓰는 계정
@@ -2047,6 +2047,14 @@ console.log('\n── 캘린더 (자동 연결) ──');
         if ((f.ymSpan || []).some(m => want.includes(m))) out.push({ document: doc(id, Object.fromEntries(Object.keys(f).map(k => [k, wrap(f[k])]))) });
       }
       return respond(200, out.length ? out : [{ readTime: 'x' }]);
+    }
+    /* DELETE — Cal.del()이 부른다 */
+    if (route.request().method() === 'DELETE') {
+      const m2 = /\/entries\/([^?/]+)/.exec(url);
+      const id = m2 ? decodeURIComponent(m2[1]) : '?';
+      cal.deleted.push(id);
+      cal.entries.delete(id);
+      return respond(200, {});
     }
     const m = /documentId=([^&]+)/.exec(url);
     const id = m ? decodeURIComponent(m[1]) : '?';
@@ -2127,6 +2135,7 @@ console.log('\n── 캘린더 (자동 연결) ──');
   check('저쪽에서 온 것은 되돌려 보내지 않는다',
     cal.created.some(c => c.id.startsWith('cw-dc-')), false);
 
+  /* ── Clear Week에서 지우면 캘린더에서도 지워진다 (spec §15, 2026-08-24) ── */
   await page.evaluate(() => {
     const it = App.cells.tue.items.find(i => String(i.data.id).startsWith('dc-'));
     App.removeItem(it, 'tue');
@@ -2134,6 +2143,67 @@ console.log('\n── 캘린더 (자동 연결) ──');
   await page.waitForTimeout(250);
   await settle(); await page.waitForTimeout(300);
   check('Clear Week에서 지운 것은 다시 안 생긴다', await dayTexts('tue'), []);
+  check('Clear Week에서 지운 dc-... 은 캘린더에서도 지워진다',
+    cal.deleted.includes('e-real'), true);
+  check('저쪽에서도 실제로 사라진다', cal.entries.has('e-real'), false);
+
+  /* Clear Week에서 자기가 만든 것(`cw-...`)을 지우면 저쪽 문서도 지워진다 */
+  await page.evaluate(() => {
+    const now = Date.now();
+    App.week.days.wed = [{ id: 'own1', text: '내가 만들어 지울 것', struck: false,
+      createdAt: now, updatedAt: now, strikes: [] }];
+    App.save(); App.render();
+  });
+  await page.waitForTimeout(250);
+  await settle(); await page.waitForTimeout(400);
+  check('먼저 저쪽에 만들어진다', cal.entries.has('cw-own1'), true);
+  await page.evaluate(() => {
+    const it = App.cells.wed.items.find(i => i.data.id === 'own1');
+    App.removeItem(it, 'wed');
+  });
+  await page.waitForTimeout(250);
+  await settle(); await page.waitForTimeout(400);
+  check('Clear Week에서 지운 cw-... 도 캘린더에서 지워진다',
+    cal.deleted.includes('cw-own1'), true);
+
+  /* 이미 없는 것을 반복해서 지우려 하지 않는다 — remoteIds에 없으면 스킵 */
+  const delsBefore = cal.deleted.length;
+  await settle(); await page.waitForTimeout(300);
+  check('없는 문서에 지우기 요청을 반복해서 보내지 않는다',
+    cal.deleted.length, delsBefore);
+
+  /* ── 캘린더에서 지운 것 → Clear Week에서도 지운다 ── */
+  {
+    /* 저쪽에 항목 하나 만들어 이쪽으로 가져온 다음, 저쪽에서 지운다 */
+    seed('gone-1', { title: '캘린더에서 사라질 것', startDate: tueISO, ymSpan: [tueISO.slice(0, 7)] });
+    await settle(); await page.waitForTimeout(300);
+    check('먼저 캘린더에서 이쪽으로 온다', await dayTexts('tue'), ['캘린더에서 사라질 것']);
+    /* 저쪽에서 지운 것을 흉내 낸다 */
+    cal.entries.delete('gone-1');
+    await settle(); await page.waitForTimeout(300);
+    check('캘린더에서 지우면 이쪽에서도 사라진다', await dayTexts('tue'), []);
+    check('무덤이 남는다 — 다음 왕복에서 되살아나지 않는다',
+      await page.evaluate(() => !!App.week.graves['dc-gone-1']), true);
+    /* 저쪽에서 같은 id로 되살려도 이쪽에는 안 온다 — 지웠던 것이라 */
+    seed('gone-1', { title: '되살린 것', startDate: tueISO, ymSpan: [tueISO.slice(0, 7)] });
+    await settle(); await page.waitForTimeout(300);
+    check('무덤이 되살아나기를 막는다', await dayTexts('tue'), []);
+    cal.entries.delete('gone-1');
+  }
+
+  /* done으로 바꾼 것은 지운 것이 아니다 — 응답에는 여전히 오므로 이쪽 dc-...가 지워지면 안 된다 */
+  {
+    seed('done-later', { title: '나중에 done이 될 것', startDate: tueISO, ymSpan: [tueISO.slice(0, 7)] });
+    await settle(); await page.waitForTimeout(300);
+    check('먼저 이쪽으로 온다', await dayTexts('tue'), ['나중에 done이 될 것']);
+    const f = cal.entries.get('done-later');
+    cal.entries.set('done-later', Object.assign({}, f, {
+      task: { status: 'done', important: false, urgent: false, order: 0 } }));
+    await settle(); await page.waitForTimeout(300);
+    check('done으로 바뀌어도 이쪽에서 사라지지 않는다', await dayTexts('tue'), ['나중에 done이 될 것']);
+    cal.entries.delete('done-later');
+    await page.evaluate(() => { App.week.days.tue = []; App.week.graves = {}; App.save(); App.render(); });
+  }
 
   await page.evaluate(() => {
     const now = Date.now();
