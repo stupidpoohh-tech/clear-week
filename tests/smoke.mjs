@@ -2125,14 +2125,12 @@ console.log('\n── 펜으로 바로 쓰기 ──');
   await clear();
 }
 
-console.log('\n── 캘린더 (자동 연결) ──');
-/* 로그인 하나로 두 앱이 이어진다 (spec §11, 2026-08-24). 별도의 "캘린더 연결"
-   화면이 없다 — Sync에 로그인하면 그 순간부터 캘린더도 오간다. */
+console.log('\n── 캘린더에서 받아 오기 (한 방향) ──');
+/* 로그인 하나로 캘린더 것도 따라 들어온다 (spec §11). **받아만 온다** (spec §15) —
+   이쪽에서 적은 것도 지운 것도 저쪽으로 가지 않는다. 저쪽에 쓰는 길이 아예 없다. */
 {
-  const cal = { entries: new Map(), created: [], deleted: [], queries: [], fail: null };
-  const doc = (id, f) => ({ name: 'projects/p/databases/(default)/documents/users/uid-'
-    + Sync_email() + '/entries/' + id, fields: f });
-  const Sync_email = () => 'auto@example.com';  // 이 절에서 쓰는 계정
+  const cal = { entries: new Map(), writes: [], queries: [], fail: null };
+  const okH = { 'access-control-allow-origin': '*' };
   const wrap = v => {
     if (v === null || v === undefined) return { nullValue: null };
     if (typeof v === 'string') return { stringValue: v };
@@ -2141,17 +2139,10 @@ console.log('\n── 캘린더 (자동 연결) ──');
     if (Array.isArray(v)) return { arrayValue: { values: v.map(wrap) } };
     return { mapValue: { fields: Object.fromEntries(Object.keys(v).map(k => [k, wrap(v[k])])) } };
   };
-  const unwrap = v => {
-    if (!v || typeof v !== 'object') return null;
-    if ('stringValue' in v) return v.stringValue;
-    if ('booleanValue' in v) return v.booleanValue;
-    if ('integerValue' in v) return Number(v.integerValue);
-    if ('nullValue' in v) return null;
-    if ('arrayValue' in v) return (v.arrayValue.values || []).map(unwrap);
-    if ('mapValue' in v) return plain(v.mapValue.fields || {});
-    return null;
-  };
-  const plain = f => Object.fromEntries(Object.keys(f).map(k => [k, unwrap(f[k])]));
+  const doc = (id, f) => ({
+    name: 'projects/p/databases/(default)/documents/users/uid-auto@example.com/entries/' + id,
+    fields: Object.fromEntries(Object.keys(f).map(k => [k, wrap(f[k])])),
+  });
   const seed = (id, over = {}) => cal.entries.set(id, Object.assign({
     kind: 'task', title: '', color: 'blue', tags: [], note: '', location: '',
     startDate: '', startTime: null, endDate: null, endTime: null,
@@ -2160,58 +2151,33 @@ console.log('\n── 캘린더 (자동 연결) ──');
     money: null, createdAt: '', updatedAt: '',
   }, over));
 
-  /* 캘린더 검사에서는 Firestore route를 이 블록만의 것으로 덮어쓴다.
-     로그인 자동 왕복까지가 이미 setupFirebase의 기본 route로 조용히 성공했다 */
-  const okH = { 'access-control-allow-origin': '*' };
   await page.unroute('https://firestore.googleapis.com/**');
   await page.route('https://firestore.googleapis.com/**', async route => {
     const url = route.request().url();
-    const body = JSON.parse(route.request().postData() || '{}');
+    const method = route.request().method();
     const respond = (status, data) => route.fulfill({
       status, contentType: 'application/json', body: JSON.stringify(data), headers: okH,
     });
-    if (cal.fail) { const s = cal.fail; cal.fail = null; return respond(s, { error: { message: 'nope' } }); }
+    if (cal.fail) { const st = cal.fail; cal.fail = null; return respond(st, { error: { message: 'nope' } }); }
 
     if (url.includes(':runQuery')) {
+      const body = JSON.parse(route.request().postData() || '{}');
       const want = body.structuredQuery.where.fieldFilter.value.arrayValue.values.map(v => v.stringValue);
       cal.queries.push({ want, auth: route.request().headers().authorization || '' });
       const out = [];
       for (const [id, f] of cal.entries) {
-        if ((f.ymSpan || []).some(m => want.includes(m))) out.push({ document: doc(id, Object.fromEntries(Object.keys(f).map(k => [k, wrap(f[k])]))) });
+        if ((f.ymSpan || []).some(m => want.includes(m))) out.push({ document: doc(id, f) });
       }
       return respond(200, out.length ? out : [{ readTime: 'x' }]);
     }
-    /* DELETE — Cal.del()이 부른다 */
-    if (route.request().method() === 'DELETE') {
-      const m2 = /\/entries\/([^?/]+)/.exec(url);
-      const id = m2 ? decodeURIComponent(m2[1]) : '?';
-      cal.deleted.push(id);
-      cal.entries.delete(id);
-      return respond(200, {});
-    }
-    const m = /documentId=([^&]+)/.exec(url);
-    const id = m ? decodeURIComponent(m[1]) : '?';
-    if (cal.entries.has(id)) return respond(409, { error: { message: 'ALREADY_EXISTS', status: 'ALREADY_EXISTS' } });
-    const f = plain(body.fields || {});
-    cal.entries.set(id, f);
-    cal.created.push({ id, f });
-    return respond(200, { name: 'projects/p/databases/(default)/documents/users/uid-auto@example.com/entries/' + id });
+    /* **여기로 오면 안 된다.** 한 방향이라 저쪽에 쓰는 길이 없어야 한다 */
+    cal.writes.push({ method, url });
+    return respond(200, {});
   });
 
-  /* 로그아웃 상태로 되돌린다 — 앞 절이 로그인해 뒀을 수 있다 */
   await page.evaluate(() => Sync.logout());
   await page.waitForTimeout(200);
 
-  /* 설정이 없으면 이 기능은 없는 것이다 */
-  await page.evaluate(() => { window.__cal = [CAL.apiKey, CAL.projectId]; CAL.apiKey = ''; CAL.projectId = ''; App.renderAuth(); });
-  await page.locator('#acctBtn').click();
-  await page.waitForTimeout(200);
-  check('설정이 없으면 로그인 자체가 없다', await page.evaluate(() =>
-    document.getElementById('authRow').hidden), true);
-  await page.evaluate(() => { CAL.apiKey = window.__cal[0]; CAL.projectId = window.__cal[1]; App.renderAuth(); });
-  await page.waitForTimeout(150);
-
-  /* 이 주에 있는 캘린더 항목을 심고, Clear Week 쪽에도 하나 적는다 */
   const wipeWeek = () => page.evaluate(() => {
     DAY_KEYS.forEach(k => { App.week.days[k] = []; App.week.notes[k] = ''; });
     App.week.graves = {};
@@ -2231,6 +2197,7 @@ console.log('\n── 캘린더 (자동 연결) ──');
   seed('e-money', { kind: 'money', title: '월세', startDate: wedISO, ymSpan: [wedISO.slice(0, 7)] });
   seed('e-rep', { title: '매주 회의', startDate: wedISO, ymSpan: [wedISO.slice(0, 7)], isRecurring: true,
                   recurrence: { freq: 'weekly', interval: 1, until: null, count: null } });
+  /* Clear Week 쪽에도 하나 적어 둔다 — 이것이 저쪽으로 가지 않아야 한다 */
   await page.evaluate(() => {
     const now = Date.now();
     App.week.days.mon = [{ id: 'a1', text: 'Clear Week에서 적음', struck: false,
@@ -2239,7 +2206,6 @@ console.log('\n── 캘린더 (자동 연결) ──');
   });
   await page.waitForTimeout(250);
 
-  /* 로그인 하나로 두 앱이 이어진다 */
   await login(page, 'auto@example.com');
   check('로그인하면 주소가 잡힌다', await page.evaluate(() => Sync.email), 'auto@example.com');
   check('그때 캘린더도 저절로 이어진다', await page.evaluate(() => Cal.live()), true);
@@ -2247,85 +2213,65 @@ console.log('\n── 캘린더 (자동 연결) ──');
 
   check('캘린더의 할 일이 그 요일에 생긴다', await dayTexts('tue'), ['캘린더에서 적음']);
   check('끝낸 일·아이디어·가계부·반복은 안 온다', await dayTexts('wed'), []);
-  check('Clear Week에서 적은 것이 캘린더에 생긴다',
-    cal.created.map(c => [c.id, c.f.title, c.f.startDate]),
-    [['cw-a1', 'Clear Week에서 적음', await isoOf('mon')]]);
-  check('저쪽 규칙이 요구하는 자리를 다 채운다', (() => {
-    const f = cal.created[0].f;
-    return [f.kind, f.isRecurring, Array.isArray(f.tags), Array.isArray(f.ymSpan),
-            f.ymSpan[0], f.task.status, f.money, f.endDate];
-  })(), ['task', false, true, true, (await isoOf('mon')).slice(0, 7), 'planned', null, null]);
   check('토큰을 달고 묻는다', /^Bearer /.test(cal.queries[0].auth), true);
-  /* 사용자 uid가 서로 같다 — 로그인 하나로 이어지는 뿌리 */
   check('Sync와 Cal은 같은 uid를 쓴다', await page.evaluate(() =>
     Sync.uid === 'uid-auto@example.com'), true);
 
-  const madeOnce = cal.created.length;
+  /* ── 한 방향이다: 이쪽 것은 아무것도 저쪽으로 안 간다 ── */
+  check('Clear Week에서 적은 것은 캘린더로 안 간다', cal.writes, []);
+  check('이쪽 항목은 그대로 남는다', await dayTexts('mon'), ['Clear Week에서 적음']);
+
+  const madeOnce = await dayTexts('tue');
   await settle(); await settle();
   await page.waitForTimeout(300);
-  check('두 번 맞춰도 캘린더에 두 번 안 생긴다', cal.created.length, madeOnce);
-  check('두 번 맞춰도 Clear Week에 두 번 안 생긴다', await dayTexts('tue'), ['캘린더에서 적음']);
-  check('저쪽에서 온 것은 되돌려 보내지 않는다',
-    cal.created.some(c => c.id.startsWith('cw-dc-')), false);
+  check('두 번 받아 와도 두 번 안 생긴다', await dayTexts('tue'), madeOnce);
+  check('그동안에도 저쪽에 쓰지 않는다', cal.writes, []);
 
-  /* ── Clear Week에서 지우면 캘린더에서도 지워진다 (spec §15, 2026-08-24) ── */
+  /* 이쪽에서 지워도 저쪽은 그대로 — 다만 이쪽에서 되살아나지도 않는다 */
   await page.evaluate(() => {
     const it = App.cells.tue.items.find(i => String(i.data.id).startsWith('dc-'));
     App.removeItem(it, 'tue');
   });
   await page.waitForTimeout(250);
   await settle(); await page.waitForTimeout(300);
-  check('Clear Week에서 지운 것은 다시 안 생긴다', await dayTexts('tue'), []);
-  check('Clear Week에서 지운 dc-... 은 캘린더에서도 지워진다',
-    cal.deleted.includes('e-real'), true);
-  check('저쪽에서도 실제로 사라진다', cal.entries.has('e-real'), false);
+  check('이쪽에서 지운 것은 다시 안 생긴다', await dayTexts('tue'), []);
+  check('그래도 저쪽 문서는 그대로다', cal.entries.has('e-real'), true);
+  check('지우기도 저쪽으로 안 간다', cal.writes, []);
 
-  /* Clear Week에서 자기가 만든 것(`cw-...`)을 지우면 저쪽 문서도 지워진다 */
+  /* 이쪽에서 자기가 만든 것을 지워도 마찬가지 */
   await page.evaluate(() => {
-    const now = Date.now();
-    App.week.days.wed = [{ id: 'own1', text: '내가 만들어 지울 것', struck: false,
-      createdAt: now, updatedAt: now, strikes: [] }];
-    App.save(); App.render();
+    const it = App.cells.mon.items.find(i => i.data.id === 'a1');
+    App.removeItem(it, 'mon');
   });
   await page.waitForTimeout(250);
-  await settle(); await page.waitForTimeout(400);
-  check('먼저 저쪽에 만들어진다', cal.entries.has('cw-own1'), true);
-  await page.evaluate(() => {
-    const it = App.cells.wed.items.find(i => i.data.id === 'own1');
-    App.removeItem(it, 'wed');
-  });
-  await page.waitForTimeout(250);
-  await settle(); await page.waitForTimeout(400);
-  check('Clear Week에서 지운 cw-... 도 캘린더에서 지워진다',
-    cal.deleted.includes('cw-own1'), true);
-
-  /* 이미 없는 것을 반복해서 지우려 하지 않는다 — remoteIds에 없으면 스킵 */
-  const delsBefore = cal.deleted.length;
   await settle(); await page.waitForTimeout(300);
-  check('없는 문서에 지우기 요청을 반복해서 보내지 않는다',
-    cal.deleted.length, delsBefore);
+  check('이쪽에서 만든 것을 지워도 저쪽에 안 간다', cal.writes, []);
 
-  /* ── 캘린더에서 지운 것 → Clear Week에서도 지운다 ── */
+  /* ── 저쪽에서 지운 것은 이쪽에서도 사라진다 ── */
   {
-    /* 저쪽에 항목 하나 만들어 이쪽으로 가져온 다음, 저쪽에서 지운다 */
+    await page.evaluate(() => { App.week.graves = {}; App.save(); });
     seed('gone-1', { title: '캘린더에서 사라질 것', startDate: tueISO, ymSpan: [tueISO.slice(0, 7)] });
     await settle(); await page.waitForTimeout(300);
-    check('먼저 캘린더에서 이쪽으로 온다', await dayTexts('tue'), ['캘린더에서 사라질 것']);
-    /* 저쪽에서 지운 것을 흉내 낸다 */
+    check('먼저 캘린더에서 이쪽으로 온다',
+      (await dayTexts('tue')).includes('캘린더에서 사라질 것'), true);
     cal.entries.delete('gone-1');
     await settle(); await page.waitForTimeout(300);
-    check('캘린더에서 지우면 이쪽에서도 사라진다', await dayTexts('tue'), []);
-    check('무덤이 남는다 — 다음 왕복에서 되살아나지 않는다',
+    check('캘린더에서 지우면 이쪽에서도 사라진다',
+      (await dayTexts('tue')).includes('캘린더에서 사라질 것'), false);
+    check('무덤이 남는다 — 되살아나지 않는다',
       await page.evaluate(() => !!App.week.graves['dc-gone-1']), true);
-    /* 저쪽에서 같은 id로 되살려도 이쪽에는 안 온다 — 지웠던 것이라 */
     seed('gone-1', { title: '되살린 것', startDate: tueISO, ymSpan: [tueISO.slice(0, 7)] });
     await settle(); await page.waitForTimeout(300);
-    check('무덤이 되살아나기를 막는다', await dayTexts('tue'), []);
+    check('무덤이 되살아나기를 막는다',
+      (await dayTexts('tue')).includes('되살린 것'), false);
     cal.entries.delete('gone-1');
   }
 
-  /* done으로 바꾼 것은 지운 것이 아니다 — 응답에는 여전히 오므로 이쪽 dc-...가 지워지면 안 된다 */
+  /* done으로 바꾼 것은 지운 것이 아니다 */
   {
+    cal.entries.delete('e-real');      // 앞 절에서 쓰던 것 — 무덤을 비우면 다시 온다
+    await page.evaluate(() => { App.week.days.tue = []; App.week.graves = {}; App.save(); App.render(); });
+    await page.waitForTimeout(200);
     seed('done-later', { title: '나중에 done이 될 것', startDate: tueISO, ymSpan: [tueISO.slice(0, 7)] });
     await settle(); await page.waitForTimeout(300);
     check('먼저 이쪽으로 온다', await dayTexts('tue'), ['나중에 done이 될 것']);
@@ -2338,26 +2284,18 @@ console.log('\n── 캘린더 (자동 연결) ──');
     await page.evaluate(() => { App.week.days.tue = []; App.week.graves = {}; App.save(); App.render(); });
   }
 
+  /* 그은 것·note 칸도 저쪽으로 갈 길이 없다 (한 방향이라 자명하지만 못박아 둔다) */
   await page.evaluate(() => {
     const now = Date.now();
     App.week.days.thu = [{ id: 'struck1', text: '이미 그은 것', struck: true,
       createdAt: now, updatedAt: now, strikes: [{ line: 0, a: 0, b: 1, seed: 1 }] }];
-    App.save(); App.render();
-  });
-  await page.waitForTimeout(250);
-  await settle(); await page.waitForTimeout(300);
-  check('그어진 항목은 캘린더로 안 간다',
-    cal.created.some(c => c.id === 'cw-struck1'), false);
-
-  await page.evaluate(() => {
-    const now = Date.now();
     App.week.days.free = [{ id: 'free1', text: '날짜 없는 것', struck: false,
       createdAt: now, updatedAt: now, strikes: [] }];
     App.save(); App.render();
   });
   await page.waitForTimeout(250);
   await settle(); await page.waitForTimeout(300);
-  check('note 칸은 캘린더로 안 간다', cal.created.some(c => c.id === 'cw-free1'), false);
+  check('그은 것도 note 칸도 저쪽으로 안 간다', cal.writes, []);
 
   cal.fail = 500;
   await settle(); await page.waitForTimeout(300);
@@ -2365,7 +2303,6 @@ console.log('\n── 캘린더 (자동 연결) ──');
     document.getElementById('authMsg').textContent), '캘린더에 닿지 못했습니다');
   check('그래도 로그인은 지킨다', await page.evaluate(() => !!Sync.email), true);
 
-  /* 뒷정리 — 다음 절에 넘기지 않는다 */
   await page.evaluate(() => Sync.logout());
   await page.locator('#acctClose').click();
   await page.waitForTimeout(300);

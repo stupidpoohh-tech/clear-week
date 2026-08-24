@@ -717,25 +717,26 @@ const LOG = {
   respectDNT: true,      // 추적 거부를 켠 브라우저에는 보내지 않는다
 };
 
-/* ── 캘린더 연결 (Dada Calendar) ─────────────────────────────
-   같은 사람이 만든 다른 웹앱과 **새로 적은 일정만** 오간다 (spec §15).
+/* ── 캘린더에서 받아 오기 (Dada Calendar) ────────────────────
+   같은 사람이 만든 다른 웹앱의 일정을 **받아만 온다** (spec §15).
+   Clear Week에서 적은 것도 지운 것도 저쪽으로 가지 않는다 — 이쪽은 거울이다.
+   **저쪽에 쓰지 않는다.** 읽기(runQuery) 하나뿐이다.
+
    저쪽은 Firebase(Auth + Firestore)다. SDK를 넣으면 이 파일의 "외부 의존 0,
-   빌드 없음"이 깨지므로 **REST로만 말한다** — 전부 그냥 `fetch`다.
+   빌드 없음"이 깨지므로 **REST로만 말한다** — 그냥 `fetch`다.
 
    두 값은 **공개돼도 되는 것이다.** 저쪽 `.env.example`이 그렇게 적어 두었고,
-   실제 보안 경계는 캘린더 쪽 `firestore.rules`다(내 uid 아래만 읽고 쓴다).
-   **비어 있으면 이 기능이 통째로 나타나지 않는다** — 서버가 없을 때
-   로그인 버튼이 안 보이는 것과 같은 규칙이다 (spec §13). */
+   실제 보안 경계는 캘린더 쪽 `firestore.rules`다(내 uid 아래만 읽는다).
+   **비어 있으면 로그인 자체가 나타나지 않는다** (spec §11·§13). */
 const CAL = {
   apiKey: 'AIzaSyDwcPMMGmYFjFqcb-3yJcbYeMhJgLGXz84',   // Firebase 웹 API 키
   projectId: 'dada-calendar-524ec',                    // Firebase 프로젝트 id
 
-  /* 오가는 것은 **할 일 하나뿐이다.** 아이디어·가계부까지 들이면 금액과 단문이
-     주간표에 섞여 이 제품의 단색 표가 무너진다. 이미 끝낸 것도 안 가져온다 —
-     끝난 일이 안 그어진 줄로 나타나면 할 일이 남은 것처럼 보인다 (spec §15). */
+  /* 받아 오는 것은 **할 일 하나뿐이다.** 아이디어·가계부까지 들이면 금액과
+     단문이 주간표에 섞여 이 제품의 단색 표가 무너진다. 이미 끝낸 것도 안
+     가져온다 — 끝난 일이 안 그어진 줄로 나타나면 할 일이 남은 것처럼 보인다. */
   kind: 'task',
-  color: 'blue',         // 저쪽에서 이 앱이 만든 것을 알아볼 수 있게
-  pushDelayMs: 1500,     // 적고 이만큼 쉬었다 보낸다
+  pullDelayMs: 1200,     // 주를 옮기고 이만큼 쉬었다 받아 온다
 };
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1442,16 +1443,17 @@ const Sync = {
 };
 
 /* ═══════════════════════════════════════════════════════════════
-   6-2. 캘린더 — Dada Calendar와 새 일정만 오간다 (spec §15)
+   6-2. 캘린더 — Dada Calendar에서 **받아만 온다** (spec §15)
 
-   **로그인 하나를 Sync와 공유한다** (spec §11, 2026-08-24). 별도 로그인 화면이
-   없다 — Clear Week에 로그인하면 그 순간부터 캘린더도 이어진다.
+   **로그인 하나를 Sync와 공유한다** (spec §11). 별도 로그인 화면이 없다 —
+   Clear Week에 로그인하면 그 순간부터 캘린더 것도 따라 들어온다.
 
-   오가는 것은 "새로 적은 것" 하나뿐이다. 취소선도, 고친 글자도, 지운 것도
-   건너가지 않는다. 그래서 규칙이 단순하다: 저쪽에 없으면 만들고, 있으면 둔다.
+   **한 방향이다** (2026-08-24 개정). 이쪽에서 적은 것도 지운 것도 저쪽으로
+   가지 않는다. 일정의 원본은 캘린더에 있고, 주간표는 그것을 종이 위에
+   펼쳐 보는 자리다. 그래서 저쪽에 쓰는 코드가 아예 없다 — 읽기 하나뿐이다.
 
-   항목 id를 서로에게서 **유도해서** 만들기 때문에(`cw-…` / `dc-…`), 몇 번을
-   맞춰도 같은 것이 두 번 생기지 않는다.
+   저쪽 항목의 id에서 이쪽 id를 유도한다(`dc-<origId>`). 몇 번을 받아 와도
+   같은 것이 두 번 생기지 않고, 저쪽에서 사라지면 이쪽에서도 지운다.
    ═══════════════════════════════════════════════════════════════ */
 
 /* Firestore REST는 값마다 타입을 적는다. 이 앱이 쓰는 것만 옮긴다 */
@@ -1498,7 +1500,6 @@ function dayDateISO(monday, key) {
   d.setDate(d.getDate() + i);
   return dateISO(d);
 }
-const docSafe = v => String(v).replace(/[^A-Za-z0-9_-]/g, '');
 
 const Cal = {
   busy: false, pending: false, timer: null,
@@ -1553,77 +1554,13 @@ const Cal = {
     return found;
   },
 
-  async create(docId, fields, token) {
-    try {
-      await this.post(this.base() + '/entries?documentId=' + encodeURIComponent(docId),
-        { fields: fsFields(fields) }, token);
-      return true;
-    } catch (e) {
-      if (e.status === 409 || String(e.code).includes('ALREADY_EXISTS')) return false;
-      throw e;
-    }
-  },
+  /* ── 받아 오기 ─────────────────────────────────────────────
+     **오가는 것이 아니라 받아만 온다** (spec §15, 2026-08-24 개정).
+     Clear Week에서 적은 것도 지운 것도 캘린더로 가지 않는다. 이쪽은 저쪽의
+     거울일 뿐이다 — 주간표는 종이의 자리이고, 일정의 원본은 캘린더에 있다.
 
-  /* 저쪽 문서를 지운다. 이미 없어도 조용히 성공으로 친다 —
-     지우기는 idempotent라 여러 번 불려도 뜻이 같다. */
-  async del(docId, token) {
-    const res = await fetch(this.base() + '/entries/' + encodeURIComponent(docId), {
-      method: 'DELETE',
-      headers: { 'authorization': 'Bearer ' + token },
-    });
-    if (!res.ok && res.status !== 404) {
-      throw Object.assign(new Error(res.status), { status: res.status });
-    }
-  },
-
-  entryDoc(text, iso) {
-    const now = new Date().toISOString();
-    /* 저쪽 firestore.rules가 title ≤ 500자로 못박아 두었다 — 잘라 보낸다.
-       잘린 사실은 앱 안에는 안 남는다(원본은 그대로다). */
-    return {
-      kind: CAL.kind, title: String(text).slice(0, 500), note: '',
-      color: CAL.color, tags: [], location: '',
-      startDate: iso, startTime: null, endDate: null, endTime: null,
-      recurrence: null, ymSpan: [iso.slice(0, 7)], isRecurring: false,
-      task: { status: 'planned', important: false, urgent: false, order: 0 },
-      money: null, createdAt: now, updatedAt: now,
-    };
-  },
-
-  schedule() {
-    if (!this.live()) return;
-    clearTimeout(this.timer);
-    this.timer = setTimeout(() => this.run(), CAL.pushDelayMs);
-  },
-
-  async run() {
-    if (!this.live() || !this.host) return;
-    if (this.busy) { this.pending = true; return; }
-    this.busy = true;
-    try {
-      await this.exchange();
-      this.mark('');
-    } catch (e) {
-      /* 401은 Sync가 알아서 로그아웃한다 (idToken()이 던진다).
-         400은 항목 하나의 문제일 수 있으니 이어짐은 지킨다. */
-      if (e.status === 401) this.mark('');       // 이미 로그아웃됐다
-      else this.mark('캘린더에 닿지 못했습니다');
-    } finally {
-      this.busy = false;
-      if (this.pending) { this.pending = false; this.run(); }
-    }
-  },
-
-  /* 저쪽 docId를 이쪽 id에서 유도한다:
-       'dc-<origId>' → '<origId>' (캘린더에서 온 것)
-       그 밖         → 'cw-<docSafe(id)>' (Clear Week에서 만든 것)
-     서로에게서 유도하기 때문에 몇 번을 맞춰도 짝이 어긋나지 않는다 (spec §15). */
-  docIdFor(id) {
-    const s = String(id);
-    return s.startsWith('dc-') ? s.slice(3) : ('cw-' + docSafe(s));
-  },
-
-  async exchange() {
+     그래서 이 모듈은 저쪽에 **쓰지 않는다.** 읽기(runQuery) 하나뿐이다. */
+  async pull() {
     const week = this.host.currentWeek();
     const monday = this.host.monday;
     if (!week || !monday) return;
@@ -1634,56 +1571,36 @@ const Cal = {
     const months = Array.from(new Set(Object.keys(dates).map(d => d.slice(0, 7))));
 
     const remote = await this.fetchMonths(months, token);
-    /* 지운 것 판정에 kind='task' 전부가 필요하다 — done도 응답에 오면 "있는 것"이다.
-       done 필터는 만들기 자리에서만 건다 (Clear Week으로 안 가져올 뿐, 지운 건 아니다). */
+    /* 지운 것 판정에는 kind='task' 전부가 필요하다 — done도 응답에 오면
+       "있는 것"이다. done 필터는 가져오는 자리에서만 건다. */
     const remoteIds = new Set();
     for (const { id, f } of remote) if (f.kind === CAL.kind) remoteIds.add(id);
 
     const have = new Set();
     for (const k of WEEK_DAYS) for (const it of week.days[k]) have.add(String(it.id));
 
-    /* ── 지우기 왕복 (spec §15, 2026-08-24 개정) ─────────────
-       "만들기만 오간다"의 예외로 "지우기도 오간다"를 추가했다. 취소선·수정·note는
-       여전히 안 간다. 삭제는 사용자가 명시적으로 없앤 것이라 흐름이 다르다. */
-
-    /* Clear Week에서 지운 것 → 캘린더에서도 지운다.
-       graves에 있는 항목의 대응 docId가 저쪽에도 살아 있으면 DELETE.
-       저쪽에 없으면(이미 지웠거나 애초에 없었으면) 조용히 넘어간다. */
-    let removed = 0;
-    for (const localId of Object.keys(week.graves || {})) {
-      const docId = this.docIdFor(localId);
-      if (!remoteIds.has(docId)) continue;
-      try {
-        await this.del(docId, token);
-        remoteIds.delete(docId);
-        removed++;
-      } catch (e) { if (e.status === 401) throw e; /* 나머지는 다음 왕복에서 */ }
-    }
-
-    /* 캘린더에서 지운 것 → Clear Week에서도 지운다.
-       이 주에 있어야 할 dc-<origId>가 응답에 없으면 저쪽에서 지운 것이다.
-       fetch가 실패했다면 여기까지 오지 못하므로, "응답에 없음"은 "지워졌음"의
-       확실한 신호가 된다. 다만 날짜를 다른 달로 옮긴 것도 "이 주에 없음"이 되어
-       삭제로 오인될 수 있다 — spec §15의 "만들기만 오간다" 결과다. */
+    let changed = 0;
     const now = Date.now();
+
+    /* 저쪽에서 지운 것은 이쪽에서도 지운다.
+       이 주에 있어야 할 `dc-<origId>`가 응답에 없으면 저쪽에서 없앤 것이다.
+       fetch가 실패했으면 여기까지 오지 못하므로 "응답에 없음"은 확실한 신호다.
+       무덤에 남겨 두어 저쪽에서 같은 id로 되살려도 다시 안 오게 한다. */
     for (const k of WEEK_DAYS) {
       const list = week.days[k];
       for (let i = list.length - 1; i >= 0; i--) {
-        const it = list[i];
-        const id = String(it.id);
+        const id = String(list[i].id);
         if (!id.startsWith('dc-')) continue;
         if (remoteIds.has(id.slice(3))) continue;
         week.graves[id] = now;
         list.splice(i, 1);
         have.delete(id);
-        removed++;
+        changed++;
       }
     }
 
-    /* ── 만들기 왕복 ────────────────────────────────────────── */
-
-    /* 캘린더 → Clear Week: 안 끝났고 반복이 아니고 이 주에 있는 것 */
-    let added = 0;
+    /* 저쪽에 새로 생긴 것을 가져온다 — 할 일이면서, 안 끝났고, 반복이 아니고,
+       이 주에 있는 것. 이쪽에서 지운 것(`graves`)은 되살리지 않는다. */
     for (const { id, f } of remote) {
       if (f.kind !== CAL.kind || f.isRecurring) continue;
       if (f.task && f.task.status === 'done') continue;
@@ -1698,23 +1615,33 @@ const Cal = {
         createdAt: now, updatedAt: now, strikes: [],
       });
       have.add(localId);
-      added++;
+      changed++;
     }
 
-    /* Clear Week → 캘린더: 저쪽에서 온 것(`dc-`)과 그은 것은 안 보낸다.
-       note 칸은 날짜가 없어서 안 간다. */
-    for (const key of WEEK_DAYS) {
-      const iso = dayDateISO(monday, key);
-      for (const it of week.days[key]) {
-        const id = String(it.id);
-        if (id.startsWith('dc-') || it.struck) continue;
-        const text = String(it.text || '').trim();
-        if (!text) continue;
-        await this.create('cw-' + docSafe(id), this.entryDoc(text, iso), token);
-      }
-    }
+    if (changed) this.host.adoptCalendar(week);
+  },
 
-    if (added || removed) this.host.adoptCalendar(week);
+  schedule() {
+    if (!this.live()) return;
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => this.run(), CAL.pullDelayMs);
+  },
+
+  async run() {
+    if (!this.live() || !this.host) return;
+    if (this.busy) { this.pending = true; return; }
+    this.busy = true;
+    try {
+      await this.pull();
+      this.mark('');
+    } catch (e) {
+      /* 401은 Sync가 알아서 로그아웃한다 (idToken()이 던진다) */
+      if (e.status === 401) this.mark('');       // 이미 로그아웃됐다
+      else this.mark('캘린더에 닿지 못했습니다');
+    } finally {
+      this.busy = false;
+      if (this.pending) { this.pending = false; this.run(); }
+    }
   },
 
   mark(text) { if (this.onChange) this.onChange(text); },
@@ -2622,7 +2549,7 @@ const App = {
     this.monday = monday;
     this.week = loadWeek(isoWeekId(monday));
     this.render();
-    Cal.schedule();                // 이 주에 걸린 일정을 캘린더와 맞춘다 (spec §15)
+    Cal.schedule();                // 이 주에 걸린 일정을 캘린더에서 받아 온다 (spec §15)
   },
 
   save() {
@@ -3420,8 +3347,6 @@ const App = {
       Log.ev('add', dayKey === 'free' ? 'free' : 'day',
              text.length, this.week.days[dayKey].length);
 
-      Cal.schedule();      // 새로 적은 것만 캘린더로 간다 (spec §15)
-
       const item = this.makeItem(data, dayKey, listEl);
       listEl.insertBefore(item.el, input);    // 입력창은 늘 목록 맨 아래
       if (this.cells[dayKey]) this.cells[dayKey].items.push(item);
@@ -3516,7 +3441,6 @@ const App = {
       this.save();
       Log.ev('add', key === 'free' ? 'free' : 'day', text.length,
              this.week.days[key].length);
-      Cal.schedule();
 
       const item = this.makeItem(data, key, cell.listEl);
       cell.listEl.appendChild(item.el);
@@ -3659,7 +3583,6 @@ const App = {
       item.data.text = text;
       item.data.updatedAt = Date.now();
       Log.ev('edit', dayKey === 'free' ? 'free' : 'day', text.length);
-      Cal.schedule();
       item.textEl.textContent = text;
       this.save();
       item.el.hidden = false;                 // 제자리에 그대로 둔다
