@@ -2,11 +2,11 @@
  * 전부 비우기 — 서버의 모든 주를 지우고, 비운 시각을 남긴다.
  * 시각을 남기지 않으면 다른 기기가 자기 사본을 다시 밀어 올려 되살아난다.
  */
-import { json, sessionEmail } from '../_lib.js';
+import { json, firebaseEmail } from '../_lib.js';
 
 export async function onRequestPost({ request, env }) {
   if (!env.CLEARWEEK) return json({ error: 'storage-unconfigured' }, 503);
-  const email = await sessionEmail(request, env);
+  const email = await firebaseEmail(request);
   if (!email) return json({ error: 'unauthorized' }, 401);
 
   const prefix = 'week:' + email + ':';

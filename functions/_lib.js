@@ -8,13 +8,12 @@
 
 export const DAY_KEYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun', 'free'];
 export const WEEK_ID_RE = /^\d{4}-W\d{2}$/;
-export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-export const SESSION_COOKIE = 'cw_session';
-export const SESSION_DAYS = 90;
-export const CODE_TTL_SEC = 600;      // 코드는 10분
-export const CODE_TRIES = 5;          // 틀릴 수 있는 횟수
 export const GRAVE_DAYS = 60;         // 지운 표시를 이만큼 보관한다
+
+/* Firebase 프로젝트 id. **캘린더와 같은 값**을 쓴다 — Clear Week과 캘린더가
+   같은 계정을 공유하기 때문이다 (spec §11, 2026-08-24). 서버는 요청마다
+   Firebase가 발급한 ID token을 검증해 email을 뽑는다. */
+export const FIREBASE_PROJECT_ID = 'dada-calendar-524ec';
 
 /* 시각은 1e12를 넘으므로 `|0`을 쓰면 안 된다 (32비트를 넘어 값이 뒤집힌다) */
 export const ts = v => (typeof v === 'number' && isFinite(v) && v > 0 ? v : 0);
@@ -29,60 +28,80 @@ export const json = (data, status = 200, headers = {}) =>
     },
   });
 
-export function randomHex(bytes) {
-  const a = new Uint8Array(bytes);
-  crypto.getRandomValues(a);
-  return Array.from(a, b => b.toString(16).padStart(2, '0')).join('');
+/* ── Firebase ID token 검증 ────────────────────────────────
+   요청마다 Authorization: Bearer <idToken>이 실려 온다. 여기서 서명·발행자·
+   수신자·만료를 전부 확인하고 그 안의 email을 뽑는다. Google 공개키(JWK)를
+   가져와 로컬에서 검증한다 — 요청마다 Google에 되묻지 않는다.
+
+   저장 키는 **email로 유지한다.** uid로 옮기지 않는 이유는 이관을 안 하려는
+   것이다. Firebase가 email을 검증한 것이 확실하다면 email로 계속 쓴다. */
+
+const JWKS_URL =
+  'https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com';
+
+let jwksCache = null;
+
+async function getJwks() {
+  const now = Date.now();
+  if (jwksCache && jwksCache.expiresAt > now) return jwksCache.keys;
+  const res = await fetch(JWKS_URL);
+  const data = await res.json();
+  const m = /max-age=(\d+)/.exec(res.headers.get('cache-control') || '');
+  const ttl = m ? Number(m[1]) * 1000 : 3600000;
+  const keys = {};
+  for (const k of (data.keys || [])) keys[k.kid] = k;
+  jwksCache = { keys, expiresAt: now + ttl };
+  return keys;
 }
 
-/* 6자리 코드. 편향 없이 뽑는다 */
-export function sixDigitCode() {
-  const a = new Uint32Array(1);
-  do { crypto.getRandomValues(a); } while (a[0] >= 4294000000);
-  return String(a[0] % 1000000).padStart(6, '0');
+function b64uToBytes(s) {
+  s = String(s).replace(/-/g, '+').replace(/_/g, '/');
+  while (s.length % 4) s += '=';
+  const bin = atob(s);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
 }
 
-export async function sha256(text) {
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
-  return Array.from(new Uint8Array(buf), b => b.toString(16).padStart(2, '0')).join('');
-}
+/* 검증에 실패하면 null. 실패 이유를 밖으로 보내지 않는다 — 조사할 자리를
+   주면 안 된다. **아이덴티티 하나만 뽑아 준다.** */
+export async function firebaseEmail(request) {
+  const auth = request.headers.get('authorization') || '';
+  const m = /^Bearer\s+(.+)$/i.exec(auth);
+  if (!m) return null;
+  const parts = m[1].trim().split('.');
+  if (parts.length !== 3) return null;
+  const [h, p, sig] = parts;
 
-/* 길이가 같은 문자열을 시간차 없이 비교한다 */
-export function safeEqual(a, b) {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
-}
+  let header, payload;
+  try {
+    header = JSON.parse(new TextDecoder().decode(b64uToBytes(h)));
+    payload = JSON.parse(new TextDecoder().decode(b64uToBytes(p)));
+  } catch (e) { return null; }
 
-export const normalizeEmail = v => String(v || '').trim().toLowerCase();
+  if (header.alg !== 'RS256' || !header.kid) return null;
+  const now = Math.floor(Date.now() / 1000);
+  if (typeof payload.exp !== 'number' || payload.exp < now) return null;
+  if (typeof payload.iat !== 'number' || payload.iat > now + 60) return null;
+  if (payload.aud !== FIREBASE_PROJECT_ID) return null;
+  if (payload.iss !== 'https://securetoken.google.com/' + FIREBASE_PROJECT_ID) return null;
+  if (typeof payload.email !== 'string' || !payload.email_verified) return null;
+  if (typeof payload.sub !== 'string' || !payload.sub) return null;
 
-export function readCookie(request, name) {
-  const raw = request.headers.get('cookie') || '';
-  for (const part of raw.split(';')) {
-    const i = part.indexOf('=');
-    if (i < 0) continue;
-    if (part.slice(0, i).trim() === name) return part.slice(i + 1).trim();
-  }
-  return null;
-}
+  const keys = await getJwks();
+  const jwk = keys[header.kid];
+  if (!jwk) return null;
 
-export const setCookie = (value, maxAge) =>
-  `${SESSION_COOKIE}=${value}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`;
+  try {
+    const key = await crypto.subtle.importKey(
+      'jwk', jwk, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify']);
+    const ok = await crypto.subtle.verify(
+      'RSASSA-PKCS1-v1_5', key, b64uToBytes(sig),
+      new TextEncoder().encode(h + '.' + p));
+    if (!ok) return null;
+  } catch (e) { return null; }
 
-export async function sessionEmail(request, env) {
-  const token = readCookie(request, SESSION_COOKIE);
-  if (!token || !/^[0-9a-f]{48,}$/.test(token)) return null;
-  return await env.CLEARWEEK.get('session:' + token);
-}
-
-/* 이 앱은 기획자 본인이 쓰는 물건이다. 허용 목록이 없으면 열지 않는다 —
-   없으면 아무 주소로나 코드 메일을 쏠 수 있는 통로가 된다. */
-export function allowedEmail(env, email) {
-  const list = String(env.ALLOWED_EMAILS || '').split(',')
-    .map(normalizeEmail).filter(Boolean);
-  if (!list.length) return null;            // 설정 안 됨
-  return list.includes(email);
+  return payload.email.toLowerCase();
 }
 
 /* 전부 비운 시각. 이보다 오래된 기기가 밀어 올리는 것은 받지 않는다 —

@@ -29,13 +29,18 @@ const TYPES = { '.html': 'text/html', '.png': 'image/png', '.webmanifest': 'appl
 
 /* ── 모의 서버 — Pages Functions 자리를 대신한다 ─────────────
    KV·메일은 흉내만 낸다. 합치기와 주고받는 모양은 진짜와 같다. */
-const api = { weeks: {}, sessions: new Map(), codes: new Map(), lastCode: null, resetAt: 0,
+/* Firebase Auth를 흉내 낸다 — 이 앱은 로그인 하나로 두 앱(Clear Week 서버·
+   캘린더 Firestore)이 함께 이어진다 (spec §11, 2026-08-24).
+   `fbUsers`가 저쪽의 사용자 저장소를 흉내 낸다. */
+const api = { weeks: {}, resetAt: 0, fbUsers: new Map(),
               log: [], logRaw: [], logOff: false, syncDelay: 0 };
 const readBody = req => new Promise(r => {
   let b = ''; req.on('data', c => (b += c)); req.on('end', () => { try { r(JSON.parse(b || '{}')); } catch { r({}); } });
 });
-const cookieOf = req => {
-  const m = /(?:^|;\s*)cw_session=([^;]+)/.exec(req.headers.cookie || '');
+/* 진짜 서버는 Firebase ID token을 검증해 email을 뽑는다. 검사에서는 토큰이
+   `tok-<email>` 모양이라 그냥 잘라 쓴다 — 규칙은 같다: Bearer가 있어야 통과. */
+const bearerEmail = req => {
+  const m = /^Bearer\s+tok-(.+)$/.exec(req.headers.authorization || '');
   return m ? m[1] : null;
 };
 const send = (res, code, data, headers = {}) => {
@@ -44,43 +49,18 @@ const send = (res, code, data, headers = {}) => {
 };
 
 async function handleApi(req, res, url) {
-  const email = api.sessions.get(cookieOf(req)) || null;
-
-  if (url === '/api/me') return send(res, 200, { email, ready: true });
+  if (url === '/api/me') return send(res, 200, { ready: true });
 
   /* 행동로그 — 진짜와 같이 언제나 204. 받은 것은 검사에서 들여다본다 */
   if (url === '/api/log') {
     if (api.logOff) { res.writeHead(404); return res.end(); }
     const b = await readBody(req);
-    api.logRaw.push(b);                        // 클라이언트가 실제로 보낸 것
-    api.log.push(...sanitizeBatch(b));         // 문지기를 통과한 것
+    api.logRaw.push(b);
+    api.log.push(...sanitizeBatch(b));
     res.writeHead(204); return res.end();
   }
 
-  if (url === '/api/auth/request') {
-    const { email: to } = await readBody(req);
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(to || ''))) return send(res, 400, { error: 'bad-email' });
-    api.lastCode = String(Math.floor(Math.random() * 1e6)).padStart(6, '0');
-    api.codes.set(String(to).toLowerCase(), api.lastCode);
-    return send(res, 200, { ok: true });
-  }
-
-  if (url === '/api/auth/verify') {
-    const b = await readBody(req);
-    const want = api.codes.get(String(b.email || '').toLowerCase());
-    if (!want || want !== String(b.code)) return send(res, 400, { error: 'wrong-code' });
-    api.codes.delete(String(b.email).toLowerCase());
-    const token = 'a'.repeat(48) + api.sessions.size;
-    api.sessions.set(token, String(b.email).toLowerCase());
-    return send(res, 200, { ok: true, email: String(b.email).toLowerCase() },
-      { 'set-cookie': `cw_session=${token}; Path=/; SameSite=Lax; Max-Age=999999` });
-  }
-
-  if (url === '/api/auth/logout') {
-    api.sessions.delete(cookieOf(req));
-    return send(res, 200, { ok: true }, { 'set-cookie': 'cw_session=; Path=/; Max-Age=0' });
-  }
-
+  const email = bearerEmail(req);
   if (!email) return send(res, 401, { error: 'unauthorized' });
 
   if (url === '/api/reset') {
@@ -143,9 +123,12 @@ const check = (name, got, want) => {
 
 const browser = await chromium.launch();
 const page = await (await browser.newContext({ viewport: { width: 390, height: 760 } })).newPage();
+/* Firebase Auth·Firestore를 흉내 낸다 — 로그인 하나로 두 앱이 이어지므로
+   로그인만 있어도 Firestore 자리가 두드려진다 (spec §11, 2026-08-24) */
+await setupFirebase(page);
 const errors = [];
 page.on('pageerror', e => errors.push(e.message));
-page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
+page.on('console', m => { if (m.type() === 'error' && !/Failed to load/.test(m.text())) errors.push(m.text()); });
 await page.goto(`http://127.0.0.1:${PORT}/index.html`);
 await page.evaluate(() => localStorage.clear());
 await page.reload();
@@ -211,16 +194,21 @@ check('카드가 화면 안에 들어온다', await page.evaluate(() => {
   return c.top >= 0 && c.bottom <= innerHeight && c.left >= 0 && c.right <= innerWidth;
 }), true);
 
-/* 서버가 없으면 로그인 버튼이 아예 안 나타난다 (spec §13) — 그 줄도 빠진다 */
-await page.evaluate(() => { Sync.ready = false; App.renderAuth(); });
+/* Firebase 설정이 없으면 로그인 버튼이 아예 안 나타난다 (spec §13, §11) — 그 줄도 빠진다 */
+await page.evaluate(() => {
+  window.__savedCal = [CAL.apiKey, CAL.projectId];
+  CAL.apiKey = ''; CAL.projectId = ''; App.renderAuth();
+});
 await page.waitForTimeout(120);
-check('서버가 없으면 로그인 줄이 빠진다',
+check('설정이 없으면 로그인 줄이 빠진다',
   await page.locator('.guide-list li:not([hidden])').count(), 3);
-check('서버가 없으면 로그인을 입에 담지 않는다',
+check('설정이 없으면 로그인을 입에 담지 않는다',
   (await 안내글()).join(' ').includes('로그인'), false);
-await page.evaluate(() => { Sync.ready = true; App.renderAuth(); });
+await page.evaluate(() => {
+  CAL.apiKey = window.__savedCal[0]; CAL.projectId = window.__savedCal[1]; App.renderAuth();
+});
 await page.waitForTimeout(120);
-check('서버가 있으면 로그인 줄이 돌아온다',
+check('설정이 있으면 로그인 줄이 돌아온다',
   await page.locator('.guide-list li:not([hidden])').count(), 4);
 
 /* 한 번에 한 줄씩 짚는다. 끝까지 짚어야 닫을 수 있다 */
@@ -1153,12 +1141,12 @@ check('저장이 막히면 알린다', await page.locator('#note').isVisible(), 
 check('알림 문구', /^저장 안 됨/.test(await page.locator('#note').textContent()), true);
 
 console.log('\n── 로그인 · 동기화 ──');
-check('서버가 없으면 로그인 버튼을 내보이지 않는다', await page.evaluate(() => {
-  const was = Sync.ready;
-  Sync.ready = false; App.renderAuth();
+check('Firebase 설정이 없으면 로그인 버튼을 내보이지 않는다', await page.evaluate(() => {
+  const k = CAL.apiKey, p = CAL.projectId;
+  CAL.apiKey = ''; CAL.projectId = ''; App.renderAuth();
   const hidden = document.getElementById('loginBtn').hidden;
   const msg = document.getElementById('authMsg').textContent;
-  Sync.ready = was; App.renderAuth();
+  CAL.apiKey = k; CAL.projectId = p; App.renderAuth();
   return { hidden, msg };
 }), { hidden: true, msg: '이 기기에만 저장됩니다' });
 /* 로그아웃 상태의 앱은 예전과 완전히 같아야 한다 */
@@ -1172,13 +1160,62 @@ async function openDrawer(pg) {
   await pg.mouse.down(); await pg.waitForTimeout(680); await pg.mouse.up();
   await pg.waitForTimeout(250);
 }
-async function login(pg, mail) {
+
+/* Firebase Auth 모의 — page.route로 두 URL을 가로챈다. 없는 계정은 signIn에서
+   400을 돌려주고, 앱은 그때 signUp을 부른다(자동 계정 만들기). */
+async function setupFirebase(pg) {
+  const okHeaders = { 'access-control-allow-origin': '*' };
+  await pg.route('https://identitytoolkit.googleapis.com/**', async route => {
+    const body = JSON.parse(route.request().postData() || '{}');
+    const url = route.request().url();
+    const send = (status, data) => route.fulfill({
+      status, contentType: 'application/json',
+      body: JSON.stringify(data), headers: okHeaders,
+    });
+    const email = String(body.email || '').toLowerCase();
+    if (url.includes(':signInWithPassword')) {
+      const pw = api.fbUsers.get(email);
+      if (pw === undefined) return send(400, { error: { message: 'EMAIL_NOT_FOUND' } });
+      if (pw !== body.password) return send(400, { error: { message: 'INVALID_PASSWORD' } });
+      return send(200, { localId: 'uid-' + email, email,
+        idToken: 'tok-' + email, refreshToken: 'ref-' + email, expiresIn: '3600' });
+    }
+    if (url.includes(':signUp')) {
+      if (String(body.password || '').length < 6) return send(400, { error: { message: 'WEAK_PASSWORD' } });
+      if (api.fbUsers.has(email)) return send(400, { error: { message: 'EMAIL_EXISTS' } });
+      api.fbUsers.set(email, body.password);
+      return send(200, { localId: 'uid-' + email, email,
+        idToken: 'tok-' + email, refreshToken: 'ref-' + email, expiresIn: '3600' });
+    }
+    return send(404, {});
+  });
+  await pg.route('https://securetoken.googleapis.com/**', async route => {
+    const body = JSON.parse(route.request().postData() || '{}');
+    const email = String(body.refresh_token || '').replace(/^ref-/, '');
+    route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ id_token: 'tok-' + email, refresh_token: 'ref-' + email }),
+      headers: okHeaders,
+    });
+  });
+  /* Firestore도 함께 — 캘린더가 auto-link되므로 로그인만 해도 여기가 두드려진다.
+     기본은 조용히 성공. 캘린더 검사에서 필요하면 그때 route를 덮어쓴다. */
+  await pg.route('https://firestore.googleapis.com/**', async route => {
+    const url = route.request().url();
+    if (url.includes(':runQuery')) return route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify([{ readTime: 'x' }]), headers: okHeaders });
+    return route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ name: 'x' }), headers: okHeaders });
+  });
+}
+
+async function login(pg, mail, pw = 'goodpw6') {
   await openDrawer(pg);
   await pg.locator('#loginBtn').click();
   await pg.locator('#loginEmail').fill(mail);
-  await pg.locator('#sendCode').click();
-  await pg.waitForTimeout(250);
-  await pg.locator('#loginCode').fill(api.lastCode);
+  await pg.locator('#loginPw').fill(pw);
   await pg.locator('#authGo').click();
   await pg.waitForFunction(() => Sync.email !== null, null, { timeout: 5000 });
   await pg.waitForTimeout(400);
@@ -1189,32 +1226,16 @@ check('로그인하면 주소가 잡힌다', await page.evaluate(() => Sync.emai
 check('로그인하면 사람 표시가 진해진다', await page.evaluate(() =>
   document.getElementById('acctBtn').classList.contains('on')), true);
 
-/* 코드는 기기가 아니라 메일 주소에 묶인다 — 받은 코드를 다른 기기에 넣어도 된다 */
+/* 같은 계정으로 다른 기기에서 다시 로그인된다 (spec §11, 2026-08-24) */
 {
   const other = await (await browser.newContext({ viewport: { width: 390, height: 760 } })).newPage();
+  await setupFirebase(other);
   await other.goto(`http://127.0.0.1:${PORT}/index.html`);
   await other.waitForTimeout(400);
   await other.evaluate(() => { markGuideSeen(); });
   await other.reload(); await other.waitForTimeout(500);
-  await other.locator('#acctBtn').click();
-  await other.waitForTimeout(200);
-  await other.locator('#loginBtn').click();
-  await other.locator('#loginEmail').fill('me@example.com');
-  check('코드 칸은 코드 받기를 누르지 않아도 열려 있다',
-    await other.locator('#loginCode').isVisible(), true);
-  /* 이 기기에서 코드를 받지 않고, 다른 기기가 받아 둔 코드를 그대로 넣는다 */
-  await other.locator('#sendCode').click();
-  await other.waitForTimeout(250);
-  const codeFromElsewhere = api.lastCode;
-  await other.reload(); await other.waitForTimeout(500);
-  await other.locator('#acctBtn').click();
-  await other.waitForTimeout(200);
-  await other.locator('#loginBtn').click();
-  await other.locator('#loginEmail').fill('me@example.com');
-  await other.locator('#loginCode').fill(codeFromElsewhere);
-  await other.locator('#authGo').click();
-  await other.waitForFunction(() => Sync.email !== null, null, { timeout: 5000 });
-  check('다른 기기가 받은 코드로 로그인된다',
+  await login(other, 'me@example.com');
+  check('다른 기기에서도 같은 계정으로 이어진다',
     await other.evaluate(() => Sync.email), 'me@example.com');
   await other.close();
 }
@@ -1231,6 +1252,7 @@ check('적은 것이 서버에 올라간다',
 
 /* 폰 = 저장소가 다른 새 브라우저 */
 const phone = await (await browser.newContext({ viewport: { width: 390, height: 760 } })).newPage();
+await setupFirebase(phone);
 await phone.goto(`http://127.0.0.1:${PORT}/index.html`);
 await phone.waitForTimeout(400);
 await phone.evaluate(() => { markGuideSeen(); document.getElementById('guide').hidden = true; App.closeGuide && App.closeGuide(); });
@@ -1362,6 +1384,7 @@ api.weeks = {}; api.resetAt = 0;
 /* 양쪽에 다 기록이 있으면 합치기 전에 물어본다 */
 const fresh = async (mail, seedText) => {
   const pg = await (await browser.newContext({ viewport: { width: 390, height: 760 } })).newPage();
+  await setupFirebase(pg);
   await pg.goto(`http://127.0.0.1:${PORT}/index.html`);
   await pg.waitForTimeout(400);
   await pg.evaluate(() => { markGuideSeen(); });
@@ -1377,14 +1400,12 @@ const fresh = async (mail, seedText) => {
   }
   return pg;
 };
-const startLogin = async (pg, mail) => {
+const startLogin = async (pg, mail, pw = 'goodpw6') => {
   await pg.locator('#acctBtn').click();
   await pg.waitForTimeout(200);
   await pg.locator('#loginBtn').click();
   await pg.locator('#loginEmail').fill(mail);
-  await pg.locator('#sendCode').click();
-  await pg.waitForTimeout(250);
-  await pg.locator('#loginCode').fill(api.lastCode);
+  await pg.locator('#loginPw').fill(pw);
   await pg.locator('#authGo').click();
   await pg.waitForTimeout(700);
 };
@@ -1971,15 +1992,22 @@ console.log('\n── 펜으로 바로 쓰기 ──');
   await clear();
 }
 
-console.log('\n── 캘린더 연결 ──');
-/* 같은 사람이 만든 다른 웹앱(Dada Calendar)과 **새로 적은 일정만** 오간다 (spec §15).
-   저쪽은 Firebase다. 여기서는 그 REST 세 곳을 가로채 흉내 낸다 —
-   진짜 프로젝트 없이도 오가는 모양과 규칙을 전부 잴 수 있다. */
+console.log('\n── 캘린더 (자동 연결) ──');
+/* 로그인 하나로 두 앱이 이어진다 (spec §11, 2026-08-24). 별도의 "캘린더 연결"
+   화면이 없다 — Sync에 로그인하면 그 순간부터 캘린더도 오간다. */
 {
-  const cal = { entries: new Map(), created: [], queries: [], token: 0, refreshed: 0, fail: null };
-  const doc = (id, f) => ({ name: 'projects/p/databases/(default)/documents/users/u1/entries/' + id,
-                            fields: f });
-  /* 이 앱이 보내는 모양 그대로 되읽는다 — 타입 표기를 진짜처럼 벗긴다 */
+  const cal = { entries: new Map(), created: [], queries: [], fail: null };
+  const doc = (id, f) => ({ name: 'projects/p/databases/(default)/documents/users/uid-'
+    + Sync_email() + '/entries/' + id, fields: f });
+  const Sync_email = () => 'auto@example.com';  // 이 절에서 쓰는 계정
+  const wrap = v => {
+    if (v === null || v === undefined) return { nullValue: null };
+    if (typeof v === 'string') return { stringValue: v };
+    if (typeof v === 'boolean') return { booleanValue: v };
+    if (typeof v === 'number') return { integerValue: String(v) };
+    if (Array.isArray(v)) return { arrayValue: { values: v.map(wrap) } };
+    return { mapValue: { fields: Object.fromEntries(Object.keys(v).map(k => [k, wrap(v[k])])) } };
+  };
   const unwrap = v => {
     if (!v || typeof v !== 'object') return null;
     if ('stringValue' in v) return v.stringValue;
@@ -1991,14 +2019,6 @@ console.log('\n── 캘린더 연결 ──');
     return null;
   };
   const plain = f => Object.fromEntries(Object.keys(f).map(k => [k, unwrap(f[k])]));
-  const wrap = v => {
-    if (v === null || v === undefined) return { nullValue: null };
-    if (typeof v === 'string') return { stringValue: v };
-    if (typeof v === 'boolean') return { booleanValue: v };
-    if (typeof v === 'number') return { integerValue: String(v) };
-    if (Array.isArray(v)) return { arrayValue: { values: v.map(wrap) } };
-    return { mapValue: { fields: Object.fromEntries(Object.keys(v).map(k => [k, wrap(v[k])])) } };
-  };
   const seed = (id, over = {}) => cal.entries.set(id, Object.assign({
     kind: 'task', title: '', color: 'blue', tags: [], note: '', location: '',
     startDate: '', startTime: null, endDate: null, endTime: null,
@@ -2007,25 +2027,17 @@ console.log('\n── 캘린더 연결 ──');
     money: null, createdAt: '', updatedAt: '',
   }, over));
 
-  const json = (route, body, status = 200) => route.fulfill({
-    status, contentType: 'application/json', body: JSON.stringify(body),
-    headers: { 'access-control-allow-origin': '*' },
-  });
-
-  await page.route('https://identitytoolkit.googleapis.com/**', async route => {
-    const body = JSON.parse(route.request().postData() || '{}');
-    if (body.password !== 'good') return json(route, { error: { message: 'INVALID_PASSWORD' } }, 400);
-    return json(route, { localId: 'u1', email: body.email,
-                         idToken: 'tok0', refreshToken: 'ref0', expiresIn: '3600' });
-  });
-  await page.route('https://securetoken.googleapis.com/**', async route => {
-    cal.refreshed++;
-    return json(route, { id_token: 'tok' + (++cal.token), refresh_token: 'ref0' });
-  });
+  /* 캘린더 검사에서는 Firestore route를 이 블록만의 것으로 덮어쓴다.
+     로그인 자동 왕복까지가 이미 setupFirebase의 기본 route로 조용히 성공했다 */
+  const okH = { 'access-control-allow-origin': '*' };
+  await page.unroute('https://firestore.googleapis.com/**');
   await page.route('https://firestore.googleapis.com/**', async route => {
     const url = route.request().url();
     const body = JSON.parse(route.request().postData() || '{}');
-    if (cal.fail) { const s = cal.fail; cal.fail = null; return json(route, { error: { message: 'nope' } }, s); }
+    const respond = (status, data) => route.fulfill({
+      status, contentType: 'application/json', body: JSON.stringify(data), headers: okH,
+    });
+    if (cal.fail) { const s = cal.fail; cal.fail = null; return respond(s, { error: { message: 'nope' } }); }
 
     if (url.includes(':runQuery')) {
       const want = body.structuredQuery.where.fieldFilter.value.arrayValue.values.map(v => v.stringValue);
@@ -2034,63 +2046,43 @@ console.log('\n── 캘린더 연결 ──');
       for (const [id, f] of cal.entries) {
         if ((f.ymSpan || []).some(m => want.includes(m))) out.push({ document: doc(id, Object.fromEntries(Object.keys(f).map(k => [k, wrap(f[k])]))) });
       }
-      return json(route, out.length ? out : [{ readTime: 'x' }]);
+      return respond(200, out.length ? out : [{ readTime: 'x' }]);
     }
     const m = /documentId=([^&]+)/.exec(url);
     const id = m ? decodeURIComponent(m[1]) : '?';
-    if (cal.entries.has(id)) {
-      return json(route, { error: { message: 'ALREADY_EXISTS: ' + id, status: 'ALREADY_EXISTS' } }, 409);
-    }
+    if (cal.entries.has(id)) return respond(409, { error: { message: 'ALREADY_EXISTS', status: 'ALREADY_EXISTS' } });
     const f = plain(body.fields || {});
     cal.entries.set(id, f);
     cal.created.push({ id, f });
-    return json(route, { name: 'projects/p/databases/(default)/documents/users/u1/entries/' + id });
+    return respond(200, { name: 'projects/p/databases/(default)/documents/users/uid-auto@example.com/entries/' + id });
   });
 
+  /* 로그아웃 상태로 되돌린다 — 앞 절이 로그인해 뒀을 수 있다 */
+  await page.evaluate(() => Sync.logout());
+  await page.waitForTimeout(200);
+
+  /* 설정이 없으면 이 기능은 없는 것이다 */
+  await page.evaluate(() => { window.__cal = [CAL.apiKey, CAL.projectId]; CAL.apiKey = ''; CAL.projectId = ''; App.renderAuth(); });
+  await page.locator('#acctBtn').click();
+  await page.waitForTimeout(200);
+  check('설정이 없으면 로그인 자체가 없다', await page.evaluate(() =>
+    document.getElementById('authRow').hidden), true);
+  await page.evaluate(() => { CAL.apiKey = window.__cal[0]; CAL.projectId = window.__cal[1]; App.renderAuth(); });
+  await page.waitForTimeout(150);
+
+  /* 이 주에 있는 캘린더 항목을 심고, Clear Week 쪽에도 하나 적는다 */
   const wipeWeek = () => page.evaluate(() => {
     DAY_KEYS.forEach(k => { App.week.days[k] = []; App.week.notes[k] = ''; });
     App.week.graves = {};
     App.save(); App.render();
   });
-  /* 이 주 월요일 기준 날짜 — 검사는 실제로 도는 날에 맞춰 스스로 계산한다 */
   const isoOf = key => page.evaluate(k => dayDateISO(App.monday, k), key);
   const dayTexts = key => page.evaluate(k => App.week.days[k].map(i => i.text), key);
   const settle = () => page.evaluate(() => Cal.run());
 
-  /* 설정이 없으면 이 기능은 없는 것이다 (spec §13과 같은 규칙).
-     지금은 값이 박혀 있으므로 잠시 비워서 그 규칙을 잰다 */
-  const realKey = await page.evaluate(() => CAL.apiKey);
-  const realPid = await page.evaluate(() => CAL.projectId);
-  await page.evaluate(() => { CAL.apiKey = ''; CAL.projectId = ''; });
-  await page.locator('#acctBtn').click();
-  await page.waitForTimeout(250);
-  check('설정이 없으면 캘린더 줄이 아예 없다', await page.evaluate(() =>
-    [document.getElementById('calRow').hidden, document.getElementById('calAuthRow').hidden]),
-    [true, true]);
-
-  await page.evaluate(([k, p]) => { CAL.apiKey = k; CAL.projectId = p; App.renderCal(); },
-                     [realKey || 'test-key', realPid || 'test-proj']);
-  await page.waitForTimeout(150);
-  check('설정이 있으면 캘린더 줄이 나타난다', await page.evaluate(() =>
-    document.getElementById('calRow').hidden), false);
-  check('잇기 전 안내', await page.evaluate(() =>
-    document.getElementById('calMsg').textContent), '이으면 새로 적은 일정이 오갑니다');
-
-  /* 틀린 비밀번호는 사람 말로 알린다 — 조용히 실패하지 않는다 */
-  await page.locator('#calBtn').click();
-  await page.locator('#calEmail').fill('me@example.com');
-  await page.locator('#calPw').fill('nope');
-  await page.locator('#calGo').click();
-  await page.waitForTimeout(400);
-  check('틀린 비밀번호는 사람 말로', await page.evaluate(() =>
-    document.getElementById('calMsg').textContent), '비밀번호가 다릅니다');
-  check('그때 이어지지 않는다', await page.evaluate(() => Cal.linked()), false);
-
-  /* 이 주에 있는 캘린더 항목들을 심어 둔다 */
   await wipeWeek();
   const tueISO = await isoOf('tue');
   const wedISO = await isoOf('wed');
-  await page.evaluate(() => { App.week.days.mon = []; App.save(); });
   seed('e-real', { title: '캘린더에서 적음', startDate: tueISO, ymSpan: [tueISO.slice(0, 7)] });
   seed('e-done', { title: '이미 끝낸 일', startDate: tueISO, ymSpan: [tueISO.slice(0, 7)],
                    task: { status: 'done', important: false, urgent: false, order: 0 } });
@@ -2098,8 +2090,6 @@ console.log('\n── 캘린더 연결 ──');
   seed('e-money', { kind: 'money', title: '월세', startDate: wedISO, ymSpan: [wedISO.slice(0, 7)] });
   seed('e-rep', { title: '매주 회의', startDate: wedISO, ymSpan: [wedISO.slice(0, 7)], isRecurring: true,
                   recurrence: { freq: 'weekly', interval: 1, until: null, count: null } });
-
-  /* Clear Week 쪽에도 하나 적어 둔다 — 양방향을 한 번에 잰다 */
   await page.evaluate(() => {
     const now = Date.now();
     App.week.days.mon = [{ id: 'a1', text: 'Clear Week에서 적음', struck: false,
@@ -2108,12 +2098,11 @@ console.log('\n── 캘린더 연결 ──');
   });
   await page.waitForTimeout(250);
 
-  await page.locator('#calPw').fill('good');
-  await page.locator('#calGo').click();
-  await page.waitForFunction(() => Cal.linked(), null, { timeout: 5000 });
+  /* 로그인 하나로 두 앱이 이어진다 */
+  await login(page, 'auto@example.com');
+  check('로그인하면 주소가 잡힌다', await page.evaluate(() => Sync.email), 'auto@example.com');
+  check('그때 캘린더도 저절로 이어진다', await page.evaluate(() => Cal.live()), true);
   await page.waitForTimeout(700);
-  check('이으면 주소가 잡힌다', await page.evaluate(() => [Cal.linked(), Cal.email]),
-    [true, 'me@example.com']);
 
   check('캘린더의 할 일이 그 요일에 생긴다', await dayTexts('tue'), ['캘린더에서 적음']);
   check('끝낸 일·아이디어·가계부·반복은 안 온다', await dayTexts('wed'), []);
@@ -2125,11 +2114,11 @@ console.log('\n── 캘린더 연결 ──');
     return [f.kind, f.isRecurring, Array.isArray(f.tags), Array.isArray(f.ymSpan),
             f.ymSpan[0], f.task.status, f.money, f.endDate];
   })(), ['task', false, true, true, (await isoOf('mon')).slice(0, 7), 'planned', null, null]);
-  check('그 주가 걸친 달만 묻는다', cal.queries[0].want,
-    Array.from(new Set([await isoOf('mon'), await isoOf('sun')].map(d => d.slice(0, 7)))));
   check('토큰을 달고 묻는다', /^Bearer /.test(cal.queries[0].auth), true);
+  /* 사용자 uid가 서로 같다 — 로그인 하나로 이어지는 뿌리 */
+  check('Sync와 Cal은 같은 uid를 쓴다', await page.evaluate(() =>
+    Sync.uid === 'uid-auto@example.com'), true);
 
-  /* 몇 번을 맞춰도 같은 것이 두 번 생기지 않는다 — id를 서로에게서 유도하기 때문 */
   const madeOnce = cal.created.length;
   await settle(); await settle();
   await page.waitForTimeout(300);
@@ -2138,18 +2127,14 @@ console.log('\n── 캘린더 연결 ──');
   check('저쪽에서 온 것은 되돌려 보내지 않는다',
     cal.created.some(c => c.id.startsWith('cw-dc-')), false);
 
-  /* 지운 것은 되살아나지 않는다 — 무덤이 그래서 있다 */
   await page.evaluate(() => {
     const it = App.cells.tue.items.find(i => String(i.data.id).startsWith('dc-'));
     App.removeItem(it, 'tue');
   });
   await page.waitForTimeout(250);
-  await settle();
-  await page.waitForTimeout(300);
+  await settle(); await page.waitForTimeout(300);
   check('Clear Week에서 지운 것은 다시 안 생긴다', await dayTexts('tue'), []);
 
-  /* 그어진 것은 안 보낸다 — 끝난 일을 저쪽에 "할 일"로 새로 만들 이유가 없다.
-     이게 없으면 지난 주를 열어 보기만 해도 다 끝낸 일이 우수수 생긴다. */
   await page.evaluate(() => {
     const now = Date.now();
     App.week.days.thu = [{ id: 'struck1', text: '이미 그은 것', struck: true,
@@ -2161,7 +2146,6 @@ console.log('\n── 캘린더 연결 ──');
   check('그어진 항목은 캘린더로 안 간다',
     cal.created.some(c => c.id === 'cw-struck1'), false);
 
-  /* note 칸은 날짜가 없어서 갈 곳이 없다 */
   await page.evaluate(() => {
     const now = Date.now();
     App.week.days.free = [{ id: 'free1', text: '날짜 없는 것', struck: false,
@@ -2172,38 +2156,16 @@ console.log('\n── 캘린더 연결 ──');
   await settle(); await page.waitForTimeout(300);
   check('note 칸은 캘린더로 안 간다', cal.created.some(c => c.id === 'cw-free1'), false);
 
-  /* 토큰은 저장하지 않는다 — 저장하는 것은 refresh 하나뿐 */
-  check('짧은 토큰은 저장하지 않는다', await page.evaluate(() => {
-    const raw = JSON.parse(localStorage['clearweek:cal']);
-    return [Object.keys(raw).sort(), raw.uid];
-  }), [['email', 'refresh', 'uid'], 'u1']);
-
-  /* 닿지 못하면 조용히 실패하지 않는다 */
   cal.fail = 500;
   await settle(); await page.waitForTimeout(300);
   check('닿지 못하면 알린다', await page.evaluate(() =>
-    document.getElementById('calMsg').textContent), '캘린더에 닿지 못했습니다');
-  check('그래도 이어진 채로 둔다', await page.evaluate(() => Cal.linked()), true);
+    document.getElementById('authMsg').textContent), '캘린더에 닿지 못했습니다');
+  check('그래도 로그인은 지킨다', await page.evaluate(() => !!Sync.email), true);
 
-  /* 토큰이 죽었으면 끊고 알린다 — 조용히 안 되는 채로 두지 않는다 */
-  cal.fail = 401;
-  await settle(); await page.waitForTimeout(300);
-  check('토큰이 죽으면 끊고 알린다', await page.evaluate(() =>
-    [Cal.linked(), document.getElementById('calMsg').textContent]),
-    [false, '다시 연결해 주세요']);
-
-  /* 일부러 거절받아 본 절이다 — 400(틀린 비밀번호)·409(이미 있음)·500·401은
-     브라우저가 남기는 자원 로드 기록이지 앱의 오류가 아니다. **여기서만** 걷어낸다.
-     `Failed to load resource`가 아닌 진짜 오류는 그대로 남아 아래에서 걸린다. */
-  for (let i = errors.length - 1; i >= 0; i--) {
-    if (/^Failed to load resource.* status of (400|401|409|500)\b/.test(errors[i])) errors.splice(i, 1);
-  }
-
-  /* 연결을 끊으면 이 기기 기록은 그대로 둔다 */
-  await page.evaluate(() => { CAL.apiKey = ''; CAL.projectId = ''; App.renderCal(); });
-  await page.evaluate(() => { DAY_KEYS.forEach(k => { App.week.days[k] = []; }); App.week.graves = {}; App.save(); App.render(); });
+  /* 뒷정리 — 다음 절에 넘기지 않는다 */
+  await page.evaluate(() => Sync.logout());
   await page.locator('#acctClose').click();
-  await page.waitForTimeout(250);
+  await page.waitForTimeout(300);
 }
 
 console.log('\n── 확대 차단 ──');

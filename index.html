@@ -487,42 +487,32 @@
   <div class="account-card">
     <h2>내 계정</h2>
 
+    <!-- 로그인은 하나다. Clear Week 서버·캘린더(Firestore) 둘 다
+         이 계정 하나로 이어진다 (spec §11, 2026-08-24) -->
     <div class="row">
       <span class="k">동기화</span>
       <span class="v plain" id="authMsg"></span>
     </div>
-    <div class="row" id="authRow">
+    <div class="row" id="authRow" hidden>
       <span class="k">계정</span>
       <span class="v">
         <button id="loginBtn" type="button">로그인</button>
         <button id="logoutBtn" type="button" hidden>로그아웃</button>
+      </span>
+    </div>
+    <div class="row" id="authFormRow" hidden>
+      <span class="k">메일</span>
+      <span class="v">
         <input id="loginEmail" class="auth-input" type="email" inputmode="email"
-               autocomplete="email" placeholder="메일 주소" hidden>
-        <button id="sendCode" type="button" hidden>코드 받기</button>
+               autocomplete="email" placeholder="메일 주소">
       </span>
     </div>
-    <div class="row" id="codeRow" hidden>
-      <span class="k">코드</span>
+    <div class="row" id="authPwRow" hidden>
+      <span class="k">비밀번호</span>
       <span class="v">
-        <input id="loginCode" class="auth-input code" type="text" inputmode="numeric"
-               autocomplete="one-time-code" maxlength="6" placeholder="여섯 자리">
+        <input id="loginPw" class="auth-input" type="password"
+               autocomplete="current-password" placeholder="여섯 자 이상">
         <button id="authGo" type="button">확인</button>
-      </span>
-    </div>
-    <div class="row" id="calRow" hidden>
-      <span class="k">캘린더</span>
-      <span class="v plain" id="calMsg"></span>
-    </div>
-    <div class="row" id="calAuthRow" hidden>
-      <span class="k">연결</span>
-      <span class="v">
-        <button id="calBtn" type="button">캘린더 잇기</button>
-        <button id="calOut" type="button" hidden>연결 끊기</button>
-        <input id="calEmail" class="auth-input" type="email" inputmode="email"
-               autocomplete="username" placeholder="캘린더 메일" hidden>
-        <input id="calPw" class="auth-input" type="password"
-               autocomplete="current-password" placeholder="비밀번호" hidden>
-        <button id="calGo" type="button" hidden>확인</button>
       </span>
     </div>
     <div class="row">
@@ -707,7 +697,6 @@ const CAL = {
   kind: 'task',
   color: 'blue',         // 저쪽에서 이 앱이 만든 것을 알아볼 수 있게
   pushDelayMs: 1500,     // 적고 이만큼 쉬었다 보낸다
-  tokenTtlMs: 50 * 60000,// 토큰은 한 시간짜리 — 그 전에 갈아 끼운다
 };
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1160,62 +1149,165 @@ function importBackup(text) {
 const SYNC = {
   pushDelayMs: 900,     // 고치고 이만큼 뒤에 올린다 (연달아 적을 때 매번 보내지 않게)
   pollMs: 15000,        // 화면이 켜져 있는 동안 이 간격으로 맞춰 본다
+  tokenTtlMs: 50 * 60000,  // Firebase ID token은 한 시간짜리 — 그 전에 갈아 끼운다
 };
 
-/* 서버가 돌려주는 이유를 사람 말로 옮긴다. 조용히 실패하지 않는다 */
-/* Firebase가 돌려주는 이유를 사람 말로 옮긴다 (spec §15) */
-const CAL_ERRORS = {
-  EMAIL_NOT_FOUND: '그 주소의 캘린더 계정이 없습니다',
+/* Firebase가 돌려주는 이유를 사람 말로 옮긴다. 조용히 실패하지 않는다 */
+const AUTH_ERRORS = {
+  EMAIL_NOT_FOUND: '그 주소로 만든 계정이 없습니다',
   INVALID_PASSWORD: '비밀번호가 다릅니다',
   INVALID_LOGIN_CREDENTIALS: '메일이나 비밀번호가 다릅니다',
   INVALID_EMAIL: '메일 주소 모양이 아닙니다',
+  MISSING_PASSWORD: '비밀번호를 넣으세요',
+  WEAK_PASSWORD: '비밀번호는 여섯 자 이상',
+  'WEAK_PASSWORD : Password should be at least 6 characters':
+    '비밀번호는 여섯 자 이상',
+  EMAIL_EXISTS: '이미 있는 계정입니다 · 로그인하세요',
   USER_DISABLED: '멈춰 있는 계정입니다',
   TOO_MANY_ATTEMPTS_TRY_LATER: '잠시 뒤에 다시 해 주세요',
+  OPERATION_NOT_ALLOWED: '이메일/비밀번호 로그인이 꺼져 있습니다',
+  'network': '연결이 안 됩니다',
 };
 
-const AUTH_ERRORS = {
-  'bad-email': '메일 주소 모양이 아닙니다',
-  'bad-code': '여섯 자리를 넣으세요',
-  'not-allowed': '허용된 주소가 아닙니다',
-  'allowlist-unconfigured': '서버에 허용 주소가 설정되지 않았습니다',
-  'mail-unconfigured': '서버에 메일 설정이 없습니다',
-  'storage-unconfigured': '서버 저장소가 연결되지 않았습니다',
-  'mail-failed': '메일을 보내지 못했습니다',
-  'too-many': '잠시 뒤에 다시 시도하세요',
-  'expired': '코드가 만료됐습니다 · 다시 받으세요',
-  'wrong-code': '코드가 다릅니다',
-  'unauthorized': '로그인이 풀렸습니다',
-};
+const AUTH_KEY = STORE_PREFIX + 'auth';   // { refresh, uid, email }
 
+/*
+ * ═══════════════════════════════════════════════════════════════
+ * 6. Sync — Firebase Auth + Clear Week 서버 (spec §11, 2026-08-24)
+ *
+ * 로그인 하나로 두 앱(Clear Week과 Dada Calendar)이 함께 이어진다. 예전에는
+ * Clear Week이 자체 인증(6자리 코드 · KV 세션 · Resend)을 두고, 캘린더는
+ * Firebase였다. 두 번 등록해야 했고 상태가 어긋났다.
+ *
+ * 지금은 둘 다 Firebase Auth를 쓴다. **Firebase SDK는 넣지 않는다** — 이 파일의
+ * "외부 의존 0, 빌드 없음"을 지키려고 REST로만 말한다.
+ *   - 로그인: identitytoolkit.googleapis.com
+ *   - 토큰 갱신: securetoken.googleapis.com
+ *   - Clear Week 서버 호출: Authorization: Bearer <idToken>
+ *   - 캘린더(Firestore): Cal 모듈이 같은 토큰을 그대로 쓴다
+ *
+ * refresh만 저장한다. 짧은 idToken은 메모리에만 두고 만료 전에 갈아 끼운다.
+ * ═══════════════════════════════════════════════════════════════
+ */
 const Sync = {
-  email: null,          // 로그인한 주소. null이면 아무것도 하지 않는다
-  ready: false,         // 서버가 준비돼 있는지 (KV 바인딩 여부)
-  busy: false,
-  pending: false,
-  timer: null,
-  onChange: null,       // 화면에 알리는 콜백
+  email: null, uid: null, refresh: null,
+  token: null, tokenAt: 0,
+  ready: false,           // 서버(KV)가 준비돼 있는지
+  busy: false, pending: false, timer: null, pushTimer: null,
+  host: null, onChange: null,
 
-  async call(path, options) {
-    const res = await fetch(path, {
-      credentials: 'same-origin',
+  /* Firebase 웹 config가 없으면 로그인 자체를 켜지 않는다 — 캘린더 값이
+     그대로 로그인에도 쓰인다. 두 값이 비면 §13처럼 로그인 버튼이 안 보인다. */
+  live() { return !!(CAL.apiKey && CAL.projectId); },
+
+  load() {
+    if (!this.live()) return;
+    try {
+      const raw = JSON.parse(localStorage.getItem(AUTH_KEY) || 'null');
+      if (raw && raw.refresh && raw.email) {
+        this.email = raw.email; this.uid = raw.uid || null; this.refresh = raw.refresh;
+      }
+    } catch (e) { /* 못 읽으면 안 이어진 것이다 */ }
+  },
+
+  remember() {
+    try {
+      if (this.email && this.refresh) {
+        localStorage.setItem(AUTH_KEY,
+          JSON.stringify({ refresh: this.refresh, uid: this.uid, email: this.email }));
+      } else localStorage.removeItem(AUTH_KEY);
+    } catch (e) { Store.fail(); }
+  },
+
+  async fbPost(url, body) {
+    let res;
+    try { res = await fetch(url, {
+      method: 'POST',
       headers: { 'content-type': 'application/json' },
-      ...options,
-    });
+      body: JSON.stringify(body),
+    }); } catch (e) { throw Object.assign(new Error('network'), { code: 'network' }); }
     let data = null;
-    try { data = await res.json(); } catch (e) { /* 몸통이 없을 수 있다 */ }
-    if (!res.ok) throw Object.assign(new Error((data && data.error) || res.status),
-                                     { status: res.status, code: data && data.error });
+    try { data = await res.json(); } catch (e) {}
+    if (!res.ok) {
+      const err = (data && data.error) || {};
+      throw Object.assign(new Error(err.message || res.status),
+        { status: res.status, code: err.message || err.status || '' });
+    }
     return data || {};
   },
 
-  async start() {
-    try {
-      const me = await this.call('/api/me', { method: 'GET' });
-      this.ready = !!me.ready;
-      this.email = me.email || null;
-    } catch (e) { this.ready = false; this.email = null; }
+  /* ── 로그인 · 계정 만들기 ─────────────────────────────────
+     같은 화면에서 둘 다 처리한다 — 사용자는 자기가 계정을 만들었는지 기억할
+     필요가 없다. 없는 계정이면 만들라고 안내한다 (renderAuth에서). */
+  async signIn(email, password) {
+    const out = await this.fbPost(
+      'https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=' + CAL.apiKey,
+      { email, password, returnSecureToken: true });
+    this._land(out);
+  },
+  async signUp(email, password) {
+    const out = await this.fbPost(
+      'https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=' + CAL.apiKey,
+      { email, password, returnSecureToken: true });
+    this._land(out);
+  },
+
+  _land(out) {
+    this.email = String(out.email || '').toLowerCase();
+    this.uid = out.localId;
+    this.refresh = out.refreshToken;
+    this.token = out.idToken;
+    this.tokenAt = Date.now();
+    this.remember();
+    /* 로그인 폼을 접어 준다 — 안 접으면 계정 화면이 이어짐 상태로 안 넘어간다 */
+    if (this.host) this.host.authStep = null;
     if (this.onChange) this.onChange();
-    if (this.email) this.begin();
+    this.begin();
+    /* 로그인 직후 서버에 있는 것을 물어본다 — 기기를 새로 이을 때 그 답으로
+       "합칠지" 물어야 한다. `host`가 그 판단을 한다. */
+    if (this.host && this.host.onLinked) this.host.onLinked();
+  },
+
+  logout() {
+    this.email = null; this.uid = null; this.refresh = null;
+    this.token = null; this.tokenAt = 0;
+    this.stop();
+    this.remember();
+    if (this.onChange) this.onChange();
+  },
+
+  async start() {
+    /* 서버 준비 여부만 물어본다. 계정은 로컬(refresh)에서 안다 */
+    try {
+      const r = await fetch('/api/me');
+      const d = await r.json().catch(() => ({}));
+      this.ready = !!d.ready;
+    } catch (e) { this.ready = false; }
+    this.load();
+    if (this.onChange) this.onChange();
+    if (this.email) { this.begin(); this.push(); }
+  },
+
+  /* 짧은 idToken은 메모리에만 — 필요할 때 refresh로 새로 받는다.
+     refresh가 죽었으면 통째로 로그아웃한다: 이어져 있는 척하면 안 된다. */
+  async idToken() {
+    if (this.token && Date.now() - this.tokenAt < SYNC.tokenTtlMs) return this.token;
+    if (!this.refresh) throw Object.assign(new Error('no-refresh'), { status: 401 });
+    let out;
+    try {
+      out = await this.fbPost(
+        'https://securetoken.googleapis.com/v1/token?key=' + CAL.apiKey,
+        { grant_type: 'refresh_token', refresh_token: this.refresh });
+    } catch (e) {
+      if (e.status === 400 || e.status === 401) { this.logout(); throw Object.assign(new Error('expired'), { status: 401 }); }
+      throw e;
+    }
+    this.token = out.id_token;
+    this.tokenAt = Date.now();
+    if (out.refresh_token && out.refresh_token !== this.refresh) {
+      this.refresh = out.refresh_token; this.remember();
+    }
+    return this.token;
   },
 
   begin() {
@@ -1224,8 +1316,25 @@ const Sync = {
       if (document.visibilityState === 'visible') this.push();
     }, SYNC.pollMs);
   },
-
   stop() { clearInterval(this.timer); this.timer = null; },
+
+  /* Clear Week 서버는 요청마다 Bearer 토큰을 붙인다 */
+  async call(path, options) {
+    const token = await this.idToken();
+    const res = await fetch(path, {
+      method: (options && options.method) || 'GET',
+      headers: Object.assign({
+        'content-type': 'application/json',
+        'authorization': 'Bearer ' + token,
+      }, options && options.headers),
+      body: options && options.body,
+    });
+    let data = null;
+    try { data = await res.json(); } catch (e) {}
+    if (!res.ok) throw Object.assign(new Error((data && data.error) || res.status),
+                                     { status: res.status, code: data && data.error });
+    return data || {};
+  },
 
   /* 지금 보는 주를 올리고, 합쳐진 것을 받아 그대로 쓴다.
      올리기와 받기를 나누면 그 사이에 갈라진다 — 한 번에 한다. */
@@ -1242,18 +1351,13 @@ const Sync = {
         method: 'POST',
         body: JSON.stringify({ weekId: week.weekId, week, resetAt: localResetAt() }),
       });
-      /* 비워진 것을 여기서 알게 될 수 있다 — 내 사본을 지우고,
-         서버가 돌려준 것을 그대로 받는다. 그것이 새 출발점이다. */
       this.host.applyReset(out.resetAt);
-      /* **보내는 사이에 더 고쳤으면 받은 것은 이미 낡았다.**
-         그대로 받으면 그 사이에 그은 획이 사라진다 — 연달아 그을 때
-         두 번째부터 지워지던 것이 이것이었다 (spec §11).
-         덮어쓰지 않고 물러난 뒤, 지금 것을 다시 올린다. */
+      /* 보내는 사이에 더 고쳤으면 받은 것은 이미 낡았다 (spec §11) */
       if (this.host.rev !== sentRev) { this.mark(''); this.schedule(); return; }
       if (out.week) this.host.adopt(out.week);
       this.mark('');
     } catch (e) {
-      if (e.status === 401) { this.email = null; this.stop(); if (this.onChange) this.onChange(); }
+      if (e.status === 401) { this.logout(); }
       else this.mark('연결 안 됨');
     } finally {
       this.busy = false;
@@ -1275,9 +1379,6 @@ const Sync = {
   /* 서버에 무엇이 있는지 보기만 한다 — 합치기 전에 물어보려면 필요하다 */
   peek() { return this.call('/api/sync/all', { method: 'GET' }); },
 
-  /* 서버를 비우고 그 시각을 남긴다. 다른 기기는 다음 차례에 그 시각을 보고 비운다.
-     keepLocal이면 이 기기 것은 남긴다 — "이 기기 것으로 맞추기"가 그 경우다.
-     남긴 뒤 곧바로 올리면 그것이 새 출발점이 된다. */
   async wipe(keepLocal) {
     const out = await this.call('/api/reset', { method: 'POST' });
     if (keepLocal) setLocalResetAt(out.resetAt);
@@ -1295,19 +1396,17 @@ const Sync = {
 };
 
 /* ═══════════════════════════════════════════════════════════════
-   6-2. 캘린더 연결 — Dada Calendar와 새 일정만 오간다 (spec §15)
+   6-2. 캘린더 — Dada Calendar와 새 일정만 오간다 (spec §15)
 
-   **오가는 것은 "새로 적은 것" 하나뿐이다.** 취소선도, 고친 글자도, 지운 것도
+   **로그인 하나를 Sync와 공유한다** (spec §11, 2026-08-24). 별도 로그인 화면이
+   없다 — Clear Week에 로그인하면 그 순간부터 캘린더도 이어진다.
+
+   오가는 것은 "새로 적은 것" 하나뿐이다. 취소선도, 고친 글자도, 지운 것도
    건너가지 않는다. 그래서 규칙이 단순하다: 저쪽에 없으면 만들고, 있으면 둔다.
 
-   덮어쓰지 않는 것이 이 연결의 뼈대다. 항목의 id를 서로에게서 **유도해서**
-   만들기 때문에(`cw-…` / `dc-…`), 몇 번을 맞춰도 같은 것이 두 번 생기지 않는다.
-   기기가 여럿이어도 같다 — 판단할 것이 없으니 갈라질 것도 없다.
-
-   Firebase SDK를 쓰지 않는다. REST만 쓴다 — 이 파일은 빌드가 없다.
+   항목 id를 서로에게서 **유도해서** 만들기 때문에(`cw-…` / `dc-…`), 몇 번을
+   맞춰도 같은 것이 두 번 생기지 않는다.
    ═══════════════════════════════════════════════════════════════ */
-
-const CAL_KEY = STORE_PREFIX + 'cal';   // { refresh, uid, email }
 
 /* Firestore REST는 값마다 타입을 적는다. 이 앱이 쓰는 것만 옮긴다 */
 function fsVal(v) {
@@ -1325,7 +1424,6 @@ function fsFields(obj) {
   for (const k of Object.keys(obj)) out[k] = fsVal(obj[k]);
   return out;
 }
-/* 되읽기 — 모르는 타입은 null로 둔다. 화면이 죽는 것보다 낫다 */
 function fsRead(v) {
   if (!v || typeof v !== 'object') return null;
   if ('stringValue' in v) return v.stringValue;
@@ -1343,12 +1441,10 @@ function fsPlain(fields) {
   return out;
 }
 
-/* 'YYYY-MM-DD' — 캘린더가 쓰는 벽시계 날짜. 저쪽도 지역 시각 기준이다 */
 function dateISO(d) {
   const p = n => String(n).padStart(2, '0');
   return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
 }
-/* 그 주 월요일에서 요일 칸 하나의 날짜 */
 function dayDateISO(monday, key) {
   const i = WEEK_DAYS.indexOf(key);
   if (i < 0) return '';
@@ -1356,37 +1452,14 @@ function dayDateISO(monday, key) {
   d.setDate(d.getDate() + i);
   return dateISO(d);
 }
-/* 문서 id에 쓸 수 없는 글자를 턴다. `/`가 들어가면 경로가 되어 버린다 */
 const docSafe = v => String(v).replace(/[^A-Za-z0-9_-]/g, '');
 
 const Cal = {
-  uid: null, email: null, refresh: null,
-  token: null, tokenAt: 0,        // 토큰은 메모리에만 — 저장하는 것은 refresh뿐
   busy: false, pending: false, timer: null,
   host: null, onChange: null,
 
-  /* 설정이 없으면 이 기능은 없는 것이다 (spec §13과 같은 규칙) */
-  live() { return !!(CAL.apiKey && CAL.projectId); },
-  linked() { return this.live() && !!(this.uid && this.refresh); },
-
-  load() {
-    if (!this.live()) return;
-    try {
-      const raw = JSON.parse(localStorage.getItem(CAL_KEY) || 'null');
-      if (raw && raw.refresh && raw.uid) {
-        this.refresh = raw.refresh; this.uid = raw.uid; this.email = raw.email || null;
-      }
-    } catch (e) { /* 못 읽으면 안 이어진 것이다 */ }
-  },
-
-  remember() {
-    try {
-      if (this.linked()) {
-        localStorage.setItem(CAL_KEY,
-          JSON.stringify({ refresh: this.refresh, uid: this.uid, email: this.email }));
-      } else localStorage.removeItem(CAL_KEY);
-    } catch (e) { Store.fail(); }
-  },
+  /* 설정이 없거나 로그인하지 않았으면 이 기능은 없는 것이다 */
+  live() { return Sync.live() && !!(Sync.email && Sync.uid); },
 
   async post(url, body, token) {
     const res = await fetch(url, {
@@ -1396,7 +1469,7 @@ const Cal = {
       body: JSON.stringify(body),
     });
     let data = null;
-    try { data = await res.json(); } catch (e) { /* 몸통이 없을 수 있다 */ }
+    try { data = await res.json(); } catch (e) {}
     if (!res.ok) {
       const err = (data && data.error) || {};
       throw Object.assign(new Error(err.message || res.status),
@@ -1405,52 +1478,11 @@ const Cal = {
     return data || {};
   },
 
-  /* ── 잇기 ──────────────────────────────────────────────────
-     캘린더의 계정으로 로그인한다. Clear Week의 로그인과는 별개다 —
-     계정 체계가 서로 다르므로 하나로 합칠 수 없다 (spec §15). */
-  async link(email, password) {
-    const out = await this.post(
-      'https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=' + CAL.apiKey,
-      { email, password, returnSecureToken: true });
-    this.uid = out.localId;
-    this.email = out.email || email;
-    this.refresh = out.refreshToken;
-    this.token = out.idToken;
-    this.tokenAt = Date.now();
-    this.remember();
-  },
-
-  unlink() {
-    this.uid = null; this.email = null; this.refresh = null;
-    this.token = null; this.tokenAt = 0;
-    clearTimeout(this.timer);
-    this.remember();
-  },
-
-  /* 짧은 토큰은 들고 있지 않는다 — 필요할 때 refresh로 새로 받는다 */
-  async idToken() {
-    if (this.token && Date.now() - this.tokenAt < CAL.tokenTtlMs) return this.token;
-    const out = await this.post(
-      'https://securetoken.googleapis.com/v1/token?key=' + CAL.apiKey,
-      { grant_type: 'refresh_token', refresh_token: this.refresh });
-    this.token = out.id_token || out.access_token;
-    this.tokenAt = Date.now();
-    if (out.refresh_token && out.refresh_token !== this.refresh) {
-      this.refresh = out.refresh_token;
-      this.remember();
-    }
-    return this.token;
-  },
-
   base() {
     return 'https://firestore.googleapis.com/v1/projects/' + CAL.projectId
-      + '/databases/(default)/documents/users/' + this.uid;
+      + '/databases/(default)/documents/users/' + Sync.uid;
   },
 
-  /* ── 가져오기 ──────────────────────────────────────────────
-     보고 있는 주가 걸친 달만 묻는다. **`ymSpan` 하나로만 거른다** —
-     `kind`까지 조건에 넣으면 복합 색인이 필요해지고, 그러면 사람이
-     콘솔에서 색인을 만들어야 한다. 나머지는 여기서 걸러도 값이 안 든다. */
   async fetchMonths(months, token) {
     const out = await this.post(this.base() + ':runQuery', {
       structuredQuery: {
@@ -1475,10 +1507,6 @@ const Cal = {
     return found;
   },
 
-  /* ── 보내기 ────────────────────────────────────────────────
-     **만들기만 한다.** 이미 있으면 그대로 둔다 — 저쪽에서 고쳐 놓은 것을
-     이쪽 글자로 덮으면 "새로 생성하는 것만 오간다"가 아니게 된다.
-     `documentId`로 만들면 이미 있을 때 서버가 409로 거절한다. 그게 정답이다. */
   async create(docId, fields, token) {
     try {
       await this.post(this.base() + '/entries?documentId=' + encodeURIComponent(docId),
@@ -1490,15 +1518,13 @@ const Cal = {
     }
   },
 
-  /* Clear Week 항목 하나 → 캘린더의 할 일 문서.
-     저쪽 `firestore.rules`가 요구하는 자리를 전부 채운다 — 하나라도 비면 거절된다. */
   entryDoc(text, iso) {
     const now = new Date().toISOString();
-    /* 저쪽 firestore.rules가 title ≤ 500자로 못박아 두었다. 클라이언트는
-       제한이 없어서 그보다 긴 항목이 넘어가면 400을 받고 통째로 끊긴다.
-       여기서 잘라 보낸다 — 잘린 사실은 앱 안에는 안 남는다(원본은 그대로다). */
+    /* 저쪽 firestore.rules가 title ≤ 500자로 못박아 두었다 — 잘라 보낸다.
+       잘린 사실은 앱 안에는 안 남는다(원본은 그대로다). */
     return {
-      kind: CAL.kind, title: String(text).slice(0, 500), note: '', color: CAL.color, tags: [], location: '',
+      kind: CAL.kind, title: String(text).slice(0, 500), note: '',
+      color: CAL.color, tags: [], location: '',
       startDate: iso, startTime: null, endDate: null, endTime: null,
       recurrence: null, ymSpan: [iso.slice(0, 7)], isRecurring: false,
       task: { status: 'planned', important: false, urgent: false, order: 0 },
@@ -1507,24 +1533,22 @@ const Cal = {
   },
 
   schedule() {
-    if (!this.linked()) return;
+    if (!this.live()) return;
     clearTimeout(this.timer);
     this.timer = setTimeout(() => this.run(), CAL.pushDelayMs);
   },
 
-  /* 한 번에 하나만 돈다. 도는 중에 또 부르면 끝나고 한 번 더 돈다 */
   async run() {
-    if (!this.linked() || !this.host) return;
+    if (!this.live() || !this.host) return;
     if (this.busy) { this.pending = true; return; }
     this.busy = true;
     try {
       await this.exchange();
       this.mark('');
     } catch (e) {
-      /* 토큰이 죽었으면 이어진 것이 아니다 — 조용히 끊고 알린다.
-         400은 항목 하나의 형태 문제일 수 있으니 이어짐은 지킨다 —
-         한 항목 때문에 통째로 끊으면 나머지 오가기까지 죽는다. */
-      if (e.status === 401) { this.unlink(); this.mark('다시 연결해 주세요'); }
+      /* 401은 Sync가 알아서 로그아웃한다 (idToken()이 던진다).
+         400은 항목 하나의 문제일 수 있으니 이어짐은 지킨다. */
+      if (e.status === 401) this.mark('');       // 이미 로그아웃됐다
       else this.mark('캘린더에 닿지 못했습니다');
     } finally {
       this.busy = false;
@@ -1537,8 +1561,8 @@ const Cal = {
     const monday = this.host.monday;
     if (!week || !monday) return;
 
-    const token = await this.idToken();
-    const dates = {};                       // iso → 요일 칸
+    const token = await Sync.idToken();
+    const dates = {};
     WEEK_DAYS.forEach(k => { dates[dayDateISO(monday, k)] = k; });
     const months = Array.from(new Set(Object.keys(dates).map(d => d.slice(0, 7))));
 
@@ -1546,7 +1570,6 @@ const Cal = {
     const have = new Set();
     for (const k of WEEK_DAYS) for (const it of week.days[k]) have.add(String(it.id));
 
-    /* 캘린더 → Clear Week. 할 일이면서, 안 끝났고, 반복이 아니고, 이 주에 있는 것 */
     let added = 0;
     for (const { id, f } of remote) {
       if (f.kind !== CAL.kind || f.isRecurring) continue;
@@ -1554,7 +1577,6 @@ const Cal = {
       const key = dates[String(f.startDate || '')];
       if (!key) continue;
       const localId = 'dc-' + id;
-      /* **지운 것은 되살리지 않는다.** 무덤이 그래서 있다 (spec §11) */
       if (have.has(localId) || week.graves[localId]) continue;
       const text = String(f.title || '').trim();
       if (!text) continue;
@@ -1568,11 +1590,8 @@ const Cal = {
     }
 
     /* Clear Week → 캘린더. 저쪽에서 온 것(`dc-`)은 되돌려 보내지 않는다.
-       note 칸은 날짜가 없어서 갈 곳이 없다 — 요일 칸만 간다 (spec §15).
-
-       **그어진 것은 안 보낸다.** 위에서 끝난 일(`done`)을 안 가져오는 것과
-       같은 규칙이다. 이게 없으면 지난 주를 열어 보기만 해도 그때 다 끝낸 일이
-       캘린더에 "할 일"로 우수수 생긴다. */
+       그어진 것도 안 보낸다 — 지난 주를 열어 보기만 해도 다 끝낸 일이 저쪽에
+       "할 일"로 우수수 생기는 것을 막는다. note 칸은 날짜가 없어서 안 간다. */
     for (const key of WEEK_DAYS) {
       const iso = dayDateISO(monday, key);
       for (const it of week.days[key]) {
@@ -2436,7 +2455,6 @@ const App = {
     this.bindBackup();
     this.bindGuide();
     this.bindAuth();
-    this.bindCal();
     Sound.unlock();                // 첫 손짓에 소리를 미리 깨워 둔다
     Sync.start();
     /* 화면을 다시 켤 때가 기기를 바꾼 순간이다 — 그때 바로 맞춘다 */
@@ -2933,8 +2951,8 @@ const App = {
     if (open === !panel.hidden) return;
     panel.hidden = !open;
     if (open) {
-      Log.ev('account'); this.authStep = null; this.calStep = null;
-      this.backupMsg(''); this.renderAuth(); this.renderCal();
+      Log.ev('account'); this.authStep = null;
+      this.backupMsg(''); this.renderAuth();
     }
   },
 
@@ -2986,69 +3004,15 @@ const App = {
   /* ── 로그인 — 서랍 안에 둔다. 설정 화면은 여전히 없다 ──────
      링크가 아니라 여섯 자리 코드를 쓴다. 메일의 링크를 누르면 사파리가 열리는데,
      홈 화면 앱과 사파리는 저장소가 달라서 앱은 로그아웃인 채로 남는다. */
-  /* ── 캘린더 연결 (spec §15) ────────────────────────────────
-     Clear Week의 로그인과 **별개의 로그인**이다. 계정 체계가 서로 다르므로
-     하나로 합칠 수 없다. 설정이 없으면 이 줄은 아예 나타나지 않는다. */
-  bindCal() {
-    const el = id => document.getElementById(id);
-    Cal.host = this;
-    Cal.onChange = msg => this.renderCal(msg);
-    Cal.load();
-
-    el('calBtn').addEventListener('click', () => {
-      this.calStep = 'login';
-      this.renderCal();
-      el('calEmail').focus();
-    });
-
-    el('calOut').addEventListener('click', () => {
-      Cal.unlink();
-      this.calStep = null;
-      this.renderCal('연결을 끊었습니다 · 이 기기의 기록은 그대로 있습니다');
-    });
-
-    const go = async () => {
-      const mail = el('calEmail').value.trim();
-      const pw = el('calPw').value;
-      if (!mail || !pw) { this.renderCal('메일과 비밀번호를 넣으세요'); return; }
-      this.renderCal('잇는 중…');
-      try {
-        await Cal.link(mail, pw);
-        el('calPw').value = '';
-        this.calStep = null;
-        this.renderCal('맞추는 중…');
-        await Cal.run();
-        this.renderCal();
-      } catch (e) {
-        this.renderCal(CAL_ERRORS[e.code] || '잇지 못했습니다 · 잠시 뒤에 다시');
-      }
-    };
-    el('calGo').addEventListener('click', go);
-    el('calPw').addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
-  },
-
-  renderCal(msg) {
-    const el = id => document.getElementById(id);
-    const on = this.calStep === 'login';
-    const linked = Cal.linked();
-    /* 설정이 없으면 두 줄 다 없는 것이다 (spec §13과 같은 규칙) */
-    el('calRow').hidden = !Cal.live();
-    el('calAuthRow').hidden = !Cal.live();
-    el('calBtn').hidden = linked || on;
-    el('calOut').hidden = !linked || on;
-    el('calEmail').hidden = !on;
-    el('calPw').hidden = !on;
-    el('calGo').hidden = !on;
-    el('calMsg').textContent = msg || (linked
-      ? Cal.email + ' · 새 일정이 오갑니다'
-      : on ? '캘린더 계정으로 잇습니다 · Clear Week 로그인과 별개입니다'
-           : '이으면 새로 적은 일정이 오갑니다');
-  },
-
   bindAuth() {
     const el = id => document.getElementById(id);
     Sync.host = this;
     Sync.onChange = msg => this.renderAuth(msg);
+    /* 로그인 직후 서버에 있는 것을 물어본다 — 기기를 새로 이을 때 그 답으로
+       "합칠지" 물어야 한다 (§11의 처음 이을 때) */
+    this.onLinked = () => this.firstLink();
+    Cal.host = this;
+    Cal.onChange = msg => this.renderAuth(msg);
 
     el('loginBtn').addEventListener('click', () => {
       this.authStep = 'login';
@@ -3056,63 +3020,49 @@ const App = {
       el('loginEmail').focus();
     });
 
-    el('logoutBtn').addEventListener('click', async () => {
+    el('logoutBtn').addEventListener('click', () => {
       Log.ev('login', 'logout');
-      try { await Sync.call('/api/auth/logout', { method: 'POST' }); }
-      catch (e) { /* 어차피 끊는다 */ }
-      Sync.email = null;
-      Sync.stop();
+      Sync.logout();
       this.authStep = null;
       this.renderAuth('로그아웃했습니다 · 이 기기의 기록은 그대로 있습니다');
     });
 
-    el('sendCode').addEventListener('click', () => this.sendCode());
-    el('authGo').addEventListener('click', () => this.verifyCode());
+    el('authGo').addEventListener('click', () => this.doAuth());
     el('loginEmail').addEventListener('keydown', e => {
-      if (e.key === 'Enter') { e.preventDefault(); this.sendCode(); }
+      if (e.key === 'Enter') { e.preventDefault(); el('loginPw').focus(); }
     });
-    el('loginCode').addEventListener('keydown', e => {
-      if (e.key === 'Enter') { e.preventDefault(); this.verifyCode(); }
+    el('loginPw').addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); this.doAuth(); }
     });
     this.bindLink();
     this.renderAuth();
   },
 
-  async sendCode() {
+  /* 로그인 하나로 두 앱이 이어진다 (spec §11, 2026-08-24).
+     같은 화면에서 로그인·계정 만들기 둘 다 처리한다 — 사용자는 자기가 계정을
+     이 앱에서 만들었는지, 캘린더에서 만들었는지 기억할 필요가 없다.
+     로그인부터 시도하고, "없는 계정"이면 자동으로 만든다. */
+  async doAuth() {
     if (this.authBusy) return;
     this.authBusy = true;
     const email = document.getElementById('loginEmail').value.trim();
+    const pw = document.getElementById('loginPw').value;
+    if (!email || !pw) { this.renderAuth('메일과 비밀번호를 넣으세요'); this.authBusy = false; return; }
+    this.renderAuth('맞추는 중…');
     try {
-      this.renderAuth('보내는 중…');
-      await Sync.call('/api/auth/request', { method: 'POST', body: JSON.stringify({ email }) });
-      Log.ev('login', 'request');
-      this.renderAuth('메일로 여섯 자리를 보냈습니다');
-      document.getElementById('loginCode').focus();
+      try { await Sync.signIn(email, pw); }
+      catch (e) {
+        /* 없는 계정이면 만든다. 나머지 오류는 그대로 알린다. */
+        const missing = e.code === 'EMAIL_NOT_FOUND'
+          || e.code === 'INVALID_LOGIN_CREDENTIALS';
+        if (!missing) throw e;
+        Log.ev('login', 'request');
+        await Sync.signUp(email, pw);
+      }
+      Log.ev('login', 'verify');
+      document.getElementById('loginPw').value = '';
     } catch (e) {
       Log.ev('login', 'fail');
-      this.renderAuth(AUTH_ERRORS[e.code] || '안 됐습니다 · 잠시 뒤에 다시');
-    } finally { this.authBusy = false; }
-  },
-
-  /* 코드는 기기가 아니라 메일 주소에 묶여 있다 — 어느 기기에서 받았든
-     아무 기기에나 넣으면 된다. 그래서 코드 칸은 늘 열려 있다. */
-  async verifyCode() {
-    if (this.authBusy) return;
-    this.authBusy = true;
-    const email = document.getElementById('loginEmail').value.trim();
-    const code = document.getElementById('loginCode').value.trim();
-    try {
-      this.renderAuth('확인 중…');
-      const out = await Sync.call('/api/auth/verify', {
-        method: 'POST', body: JSON.stringify({ email, code }),
-      });
-      Sync.email = out.email;
-      Log.ev('login', 'verify');
-      this.authStep = null;
-      this.renderAuth('맞추는 중…');
-      await this.firstLink();
-      Sync.begin();
-    } catch (e) {
       this.renderAuth(AUTH_ERRORS[e.code] || '안 됐습니다 · 잠시 뒤에 다시');
     } finally { this.authBusy = false; }
   },
@@ -3120,6 +3070,7 @@ const App = {
   /* 기기를 처음 이을 때 — 양쪽에 다 기록이 있으면 합치기 전에 물어본다.
      한쪽만 있으면 물을 것이 없다. 그냥 맞춘다. */
   async firstLink() {
+    this.renderAuth('맞추는 중…');
     const mine = Object.keys(this.allWeeks()).length;
     let theirs = 0;
     try {
@@ -3134,6 +3085,9 @@ const App = {
       return;
     }
     await Sync.syncAll();
+    /* 캘린더 쪽도 곧바로 왕복한다 — 로그인이 이 둘의 손잡이라, 늦으면 사용자가
+       "이어졌다"고 느끼는 순간과 실제 오가는 시점이 어긋난다 (spec §11) */
+    await Cal.run();
     this.renderAuth();
   },
 
@@ -3188,13 +3142,14 @@ const App = {
   renderAuth(msg) {
     const el = id => document.getElementById(id);
     const on = this.authStep === 'login';
-    /* 서버가 없으면 계정 줄 자체를 내보이지 않는다 — 라벨만 남아 빈 줄이 되지 않게 */
-    el('authRow').hidden = !Sync.ready && !Sync.email;
-    el('loginBtn').hidden = !Sync.ready || !!Sync.email || on;
+    /* 로그인은 두 값(CAL.apiKey·projectId)이 있어야 시작한다. 서버(KV)와
+       Firebase는 별개다 — 둘 중 하나만 있어도 계정 줄은 낼 수 있다. */
+    const canLogin = Sync.live();
+    el('authRow').hidden = !canLogin && !Sync.email;
+    el('loginBtn').hidden = !canLogin || !!Sync.email || on;
     el('logoutBtn').hidden = !Sync.email;
-    el('loginEmail').hidden = !on;
-    el('sendCode').hidden = !on;
-    el('codeRow').hidden = !on;
+    el('authFormRow').hidden = !on;
+    el('authPwRow').hidden = !on;
     el('wipeRow').hidden = !Sync.email || on;
     if (!Sync.email) { el('linkRow').hidden = true; this.wipeArmed = false; }
     if (!this.wipeArmed) el('wipeBtn').textContent = '전부 비우기';
@@ -3202,13 +3157,11 @@ const App = {
     el('acctBtn').classList.toggle('on', !!Sync.email);
     el('authMsg').textContent = msg || (Sync.email
       ? Sync.email + ' · 자동으로 맞춰집니다'
-      : on ? '메일로 받은 여섯 자리를 넣으세요 · 없으면 코드 받기'
+      : on ? '이메일과 비밀번호로 로그인합니다 · 없으면 만들어집니다'
            : '이 기기에만 저장됩니다');
-    /* 안내는 서버가 있는지 알기 전에 먼저 뜬다(`/api/me`는 나중에 온다).
-       답이 오면 로그인 줄을 켜거나 끈다 — 없는 것을 안내하지 않게 (spec §13). */
     if (this.guideOn) {
-      el('guideSync').hidden = !Sync.ready;
-      this.showGuideStep(this.guideStep);     // 줄 수가 바뀌었을 수 있다
+      el('guideSync').hidden = !canLogin;
+      this.showGuideStep(this.guideStep);
     }
   },
 
