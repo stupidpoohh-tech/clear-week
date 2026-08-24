@@ -1852,6 +1852,107 @@ console.log('\n── 방문자 행동로그 ──');
   check('켜면 기억도 바뀐다', await page.evaluate(() => localStorage['clearweek:sound']), 'on');
 }
 
+console.log('\n── 당겨서 새로고침 ──');
+/* 한 주가 한 화면이라 페이지 스크롤이 없고, 그래서 브라우저의 당겨서 새로고침도
+   없다. 화면 맨 위에서 아래로 당기면 새로 받는다 (spec §16). */
+{
+  await page.evaluate(() => {
+    DAY_KEYS.forEach(k => { App.week.days[k] = []; }); App.week.graves = {};
+    App.save(); App.render();
+    /* 진짜로 새로고침되면 검사가 끊긴다 — 불렸는지만 잡는다 */
+    window.__reloads = 0;
+    App.reload = () => { window.__reloads++; };
+  });
+  await page.waitForTimeout(300);
+  const reloads = () => page.evaluate(() => window.__reloads);
+  const barH = () => page.evaluate(() => {
+    const b = document.getElementById('pull');
+    const w = b.querySelector('i').getBoundingClientRect().width;
+    return { hidden: b.hidden, ready: b.classList.contains('ready'),
+             w: Math.round(w) };
+  });
+  /* 빈 곳에서 아래로 끈다 */
+  const drag = async (dy, dx = 0, steps = 12) => {
+    const at = await page.evaluate(() => {
+      const r = App.cells.sat.listEl.getBoundingClientRect();
+      return { x: r.x + r.width * 0.5, y: r.y + 8 };
+    });
+    await page.mouse.move(at.x, at.y);
+    await page.mouse.down();
+    for (let i = 1; i <= steps; i++) {
+      await page.mouse.move(at.x + (dx * i) / steps, at.y + (dy * i) / steps);
+      await page.waitForTimeout(8);
+    }
+    return at;
+  };
+
+  check('처음엔 표시가 없다', await barH(), { hidden: true, ready: false, w: 0 });
+
+  /* 조금만 당기면 표시는 자라되 아직 준비 아님 */
+  await drag(30);
+  const small = await barH();
+  check('조금 당기면 실선이 자란다', [small.hidden, small.ready, small.w > 10], [false, false, true]);
+  await page.mouse.up(); await page.waitForTimeout(250);
+  check('덜 당기고 놓으면 새로고침 안 한다', await reloads(), 0);
+  check('놓으면 표시가 사라진다', (await barH()).hidden, true);
+
+  /* 충분히 당기면 준비 상태가 되고, 놓으면 새로 받는다 */
+  await drag(110);
+  const big = await barH();
+  check('충분히 당기면 준비 상태가 된다', big.ready, true);
+  /* 표 위를 가로지르지 않는다 — 맨 위 가장자리에 붙어 있어야 취소선으로 안 보인다 */
+  check('표시는 표 위가 아니라 맨 위 가장자리에 있다', await page.evaluate(() => {
+    const b = document.getElementById('pull').getBoundingClientRect();
+    const week = document.getElementById('weekBody').getBoundingClientRect();
+    return b.bottom <= week.top;
+  }), true);
+  await page.mouse.up(); await page.waitForTimeout(250);
+  check('놓으면 새로 받는다', await reloads(), 1);
+  check('받은 뒤 표시는 사라진다', (await barH()).hidden, true);
+
+  /* 가로로 가면 남의 손짓이다 — 긋기·지우기의 자리 */
+  await drag(60, 140);
+  check('가로가 우세하면 당김으로 안 센다', (await barH()).hidden, true);
+  await page.mouse.up(); await page.waitForTimeout(250);
+  check('그때 새로고침도 안 한다', await reloads(), 1);
+
+  /* 항목 위에서 시작한 손짓은 그 항목의 것이다 (Gesture.busy) */
+  await page.evaluate(() => {
+    const now = Date.now();
+    App.week.days.sat = [{ id: 'pull1', text: '긋는 항목', struck: false,
+      createdAt: now, updatedAt: now, strikes: [] }];
+    App.save(); App.render();
+  });
+  await page.waitForTimeout(300);
+  {
+    const r = await page.evaluate(() => {
+      const q = App.cells.sat.items[0].el.getBoundingClientRect();
+      return { x: q.x + q.width * 0.3, y: q.y + q.height / 2 };
+    });
+    await page.mouse.move(r.x, r.y); await page.mouse.down();
+    for (let i = 1; i <= 12; i++) { await page.mouse.move(r.x, r.y + (110 * i) / 12); await page.waitForTimeout(8); }
+    check('항목 위에서 당겨도 표시가 안 뜬다', (await barH()).hidden, true);
+    await page.mouse.up(); await page.waitForTimeout(300);
+    check('항목 위 세로 드래그로는 새로고침 안 한다', await reloads(), 1);
+  }
+
+  /* 계정 화면이 열려 있으면 당김은 없다 */
+  await page.locator('#acctBtn').click();
+  await page.waitForTimeout(250);
+  await drag(110);
+  check('계정 화면이 열려 있으면 당김이 안 먹는다', (await barH()).hidden, true);
+  await page.mouse.up(); await page.waitForTimeout(200);
+  check('그때도 새로고침 안 한다', await reloads(), 1);
+  await page.locator('#acctClose').click();
+  await page.waitForTimeout(250);
+
+  await page.evaluate(() => {
+    DAY_KEYS.forEach(k => { App.week.days[k] = []; }); App.week.graves = {};
+    App.save(); App.render();
+  });
+  await page.waitForTimeout(250);
+}
+
 console.log('\n── 펜으로 바로 쓰기 ──');
 /* 아이패드 손글씨 변환은 **텍스트 입력창 위에서만** 돈다. 탭해서 입력창을
    만든 다음에 쓰라고 하면 손이 한 번 더 간다 — 그래서 칸마다 투명한 입력창을
@@ -1915,11 +2016,43 @@ console.log('\n── 펜으로 바로 쓰기 ──');
     const el = document.elementFromPoint(t.x + t.width / 2, t.y + t.height / 2);
     return !!(el && el.closest('.item'));
   }), true);
+  /* **판은 글자 높이에 걸치지 않는다** (spec §4-7, 2026-08-24).
+     스크리블은 포인터 히트 테스트를 안 따르므로, 판이 글자 밑에 깔려 있기만 해도
+     iOS가 그 위의 펜을 낚아채 취소선이 새 글자로 들어간다. z-index로는 못 막는다. */
+  check('판이 적힌 것보다 아래에서 시작한다', await page.evaluate(() => {
+    const last = App.cells.thu.items[App.cells.thu.items.length - 1].el.getBoundingClientRect();
+    const lay = App.cells.thu.layer.getBoundingClientRect();
+    return lay.top >= last.bottom - 1;
+  }), true);
   check('빈 곳을 짚으면 판이 잡힌다', await page.evaluate(() => {
     const r = App.cells.thu.listEl.getBoundingClientRect();
     const el = document.elementFromPoint(r.x + r.width * 0.4, r.bottom - 14);
     return !!(el && el.classList.contains('pad-layer'));
   }), true);
+  await clear();
+
+  /* 지켜야 할 성질은 하나다: **판이 어떤 항목과도 세로로 겹치지 않는다.**
+     칸이 나뉘든 꽉 차든 같다. 겹치면 그 위의 펜을 iOS가 낚아챈다. */
+  for (const n of [1, 3, 8, 30]) {
+    await page.evaluate(count => {
+      const now = Date.now();
+      App.week.days.thu = Array.from({ length: count }, (_, i) => ({
+        id: 'many' + i, text: '항목 ' + i, struck: false,
+        createdAt: now + i, updatedAt: now + i, strikes: [],
+      }));
+      App.save(); App.render();
+    }, n);
+    await page.waitForTimeout(400);
+    check(`항목 ${n}개일 때 판이 글자와 안 겹친다`, await page.evaluate(() => {
+      const c = App.cells.thu;
+      if (c.layer.hidden) return true;          // 자리가 없으면 판도 없다
+      const lay = c.layer.getBoundingClientRect();
+      return c.items.every(i => {
+        const r = i.el.getBoundingClientRect();
+        return r.height < 1 || r.bottom <= lay.top + 1;
+      });
+    }), true);
+  }
   await clear();
 
   /* **여기가 이 절의 핵심이다.** 스크리블은 포인터 없이 포커스만 준다 —

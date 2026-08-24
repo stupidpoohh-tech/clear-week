@@ -6,14 +6,20 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Clear Week">
-<!-- 홈 화면 앱 상단 바 — 흰색으로 고정한다.
-     `default`는 iOS가 "적절히" 정하는데, 다크모드 기기에서는 남색으로 나온다.
-     `theme-color`를 라이트/다크 둘 다 흰색으로 못박고, 상태바를 `default`로
-     두어야 아이콘/글자가 검게 나온다 — 흰 바탕엔 검은 아이콘. -->
+<!-- 홈 화면 앱 상단 바 (spec §16).
+     **iOS는 `theme-color`를 안 본다.** 상태바는 아래 한 줄이 전부이고,
+     고를 수 있는 값은 셋뿐이다:
+       default          흰 바탕 · 검은 글자   ← 이것
+       black            검은 바탕
+       black-translucent 투명(본문 배경이 비침) · **흰 글자**
+     흰 바탕에 검은 글자는 `default` 하나로만 나온다. black-translucent로는
+     글자가 흰색으로 고정돼 흰 바탕과 겹쳐 안 보인다.
+     `theme-color`는 안드로이드·데스크톱 브라우저용으로 남겨 둔다.
+
+     **이 값은 홈 화면에 추가하는 순간 iOS가 붙들어 둔다.** 고친 뒤에는
+     홈 화면에서 앱을 지우고 다시 추가해야 반영된다 (CLAUDE.md 16번). -->
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="theme-color" content="#ffffff">
-<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: dark)">
 <meta name="color-scheme" content="light">
 <meta name="supported-color-schemes" content="light">
 <link rel="apple-touch-icon" href="icon-180.png">
@@ -436,6 +442,27 @@
      평소에는 보이지 않는다. 글자도 커서도 투명하고 테두리도 없다.
      항목보다 **아래**에 깔리므로(z-index) 글자 위는 여전히 긋기의 자리다 —
      펜이 닿는 곳이 빈 곳이면 쓰기, 글자면 긋기로 저절로 갈린다. */
+  /* ── 당겨서 새로고침 (spec §16) ────────────────────────────
+     한 주가 한 화면이라 스크롤이 없고, 그래서 브라우저가 주는 당겨서
+     새로고침도 없다. 화면 맨 위에서 아래로 당기면 새로 받는다.
+     당기는 동안 머리말 위에 실선 하나가 자란다 — 얼마나 더 당겨야 하는지가
+     그 길이로 보인다. 문구는 두지 않는다. */
+  /* **표 위를 가로지르지 않는다.** 처음에는 당긴 만큼 아래로 내려오는 선을
+     그렸는데, 이 앱에서 가로로 그어진 진한 선은 곧 취소선이다 — 표 한가운데를
+     지나가니 항목을 그은 것처럼 보였다. 맨 위 가장자리에 붙여 두고
+     **폭으로만** 자라게 한다. 안전영역 아래에 둬야 상태바에 안 가린다. */
+  .pull {
+    position: fixed; left: 0; right: 0; z-index: 60;
+    top: env(safe-area-inset-top, 0px);
+    height: 3px; pointer-events: none;
+  }
+  .pull i {
+    display: block; height: 100%; width: var(--pull, 0%);
+    background: var(--ink-faint);
+    transition: background 120ms linear;
+  }
+  .pull.ready i { background: var(--ink); }
+
   .pad-layer {
     position: absolute; z-index: 0;
     margin: 0; padding: 0 2px;      /* 항목 글자와 왼쪽 끝을 맞춘다 */
@@ -491,6 +518,7 @@
   <p class="note-line" id="note" hidden></p>
   <div class="week" id="weekBody"></div>
 </main>
+<div class="pull" id="pull" hidden><i></i></div>
 <input id="importFile" type="file" accept="application/json,.json" hidden>
 
 
@@ -896,9 +924,16 @@ const AUTO_SPLIT = {
 };
 
 /* 펜으로 크게 쓰는 자리 (spec §4-7). 손글씨 변환은 입력창이 커야 팔이 펴진다 */
+/* 당겨서 새로고침 (spec §16). 화면이 고정이라 브라우저의 그것이 없다 */
+const PULL = {
+  distance: 72,    // 이만큼 당기면 놓았을 때 새로 받는다 (px)
+  slopPx: 10,      // 이만큼은 움직여야 당기는 것으로 친다
+};
+
 const PAD = {
   fontPx: 26,      // 깨어났을 때의 글자 크기. 이만큼은 돼야 팔이 펴진다
   guardMs: 400,    // 손가락이 누른 직후의 포커스는 손가락 것으로 본다
+  minRoom: 22,     // 빈 자리가 이보다 좁으면 판을 두지 않는다 (spec §4-7)
 };
 
 /* 열 수를 칸에 반영한다. 나눌수록 그 칸의 글씨가 작아진다. */
@@ -2531,6 +2566,7 @@ const App = {
     this.bindBackup();
     this.bindGuide();
     this.bindAuth();
+    this.bindPull();
     Sound.unlock();                // 첫 손짓에 소리를 미리 깨워 둔다
     Sync.start();
     /* 화면을 다시 켤 때가 기기를 바꾼 순간이다 — 그때 바로 맞춘다 */
@@ -3080,6 +3116,71 @@ const App = {
   /* ── 로그인 — 서랍 안에 둔다. 설정 화면은 여전히 없다 ──────
      링크가 아니라 여섯 자리 코드를 쓴다. 메일의 링크를 누르면 사파리가 열리는데,
      홈 화면 앱과 사파리는 저장소가 달라서 앱은 로그아웃인 채로 남는다. */
+  /* ── 당겨서 새로고침 (spec §16) ────────────────────────────
+     한 주가 한 화면이라 페이지 스크롤이 없다. 그래서 브라우저가 주는
+     당겨서 새로고침도 없고, 새로 배포된 것을 받으려면 주소창을 꺼내야 했다.
+     홈 화면 앱에서는 주소창조차 없다.
+
+     **다른 손짓과 겹치지 않는 자리에만 건다.** 항목 위는 이미 손짓이 붙어
+     있으므로(`Gesture.busy`) 비켜 가고, 세로로 우세하게 아래로 당길 때만 센다 —
+     가로는 긋기·지우기의 것이다. 적는 중이거나 판이 깨어 있으면 아예 안 센다. */
+  bindPull() {
+    const bar = document.getElementById('pull');
+    let from = null, pulling = false;
+
+    const paint = d => {
+      bar.hidden = d <= 0;
+      bar.style.setProperty('--pull', clamp(d / PULL.distance, 0, 1) * 100 + '%');
+      bar.classList.toggle('ready', d >= PULL.distance);
+    };
+    const reset = () => { from = null; pulling = false; paint(0); };
+
+    const busy = () => Gesture.busy > 0
+      || !!document.querySelector('.entry, .sublabel-entry, .pad-layer.on')
+      || !document.getElementById('account').hidden
+      || !document.getElementById('guide').hidden;
+
+    document.addEventListener('pointerdown', e => {
+      /* target이 document일 수도 있다 — closest가 없다.
+         **잠든 필기판은 손잡이가 아니다** — 칸의 빈 곳을 통째로 덮고 있는
+         투명한 입력창이라, 이것까지 비켜 가면 당길 자리가 거의 없어진다.
+         깨어 있는 판은 위 `busy()`가 이미 막는다 (spec §16). */
+      const t = e.target && e.target.closest ? e.target : null;
+      const control = t && (t.closest('button') || t.closest('input:not(.pad-layer)'));
+      if (busy() || !t || control) { from = null; return; }
+      from = { x: e.clientX, y: e.clientY, id: e.pointerId };
+      pulling = false;
+    }, true);
+
+    document.addEventListener('pointermove', e => {
+      if (!from || e.pointerId !== from.id) return;
+      const dx = e.clientX - from.x, dy = e.clientY - from.y;
+      /* 아래로, 세로가 우세할 때만. 가로 우세면 그 손짓은 남의 것이다 */
+      if (!pulling) {
+        if (Math.abs(dx) > Math.abs(dy) || dy < PULL.slopPx) {
+          if (Math.abs(dx) >= PULL.slopPx) from = null;   // 가로로 갔다 — 놓아 준다
+          return;
+        }
+        pulling = true;
+      }
+      if (busy()) { reset(); return; }
+      paint(dy);
+    }, true);
+
+    const release = () => {
+      if (!from || !pulling) { reset(); return; }
+      const ready = bar.classList.contains('ready');
+      reset();
+      if (ready) this.reload();
+    };
+    document.addEventListener('pointerup', release, true);
+    document.addEventListener('pointercancel', () => reset(), true);
+  },
+
+  /* 새로 받는다. 한 줄짜리 함수로 빼 둔 것은 검사에서 갈아 끼우기 위해서다 —
+     진짜로 새로고침하면 검사가 그 자리에서 끊긴다. */
+  reload() { location.reload(); },
+
   bindAuth() {
     const el = id => document.getElementById(id);
     Sync.host = this;
@@ -3438,19 +3539,38 @@ const App = {
     typeSound(layer);
   },
 
-  /* 판은 그 칸의 **적히는 자리**를 그대로 덮는다. 요일 칸은 여백 오른쪽,
-     note 칸은 라벨 아래 — 칸마다 다르므로 실제 상자를 재서 맞춘다. */
+  /* 판은 그 칸에서 **아직 안 적힌 자리**만 덮는다 (spec §4-7, 2026-08-24 개정).
+     처음에는 적히는 자리 전체를 덮었는데, 이미 적힌 글자 위에 펜을 대면
+     **취소선이 아니라 새 글자로 들어갔다.** 스크리블은 포인터 히트 테스트를
+     따르지 않는다 — iOS가 그 언저리의 텍스트 입력창을 찾아 획을 가져가므로,
+     판이 글자 밑에 깔려 있기만 해도 그 위의 펜을 낚아챈다. z-index로는 못 막는다.
+     **글자가 있는 높이에는 판을 두지 않는 것**이 유일한 방법이다.
+
+     칸이 꽉 차 쓸 자리가 없으면 판을 아예 숨긴다 — 쓸 곳이 없는 게 맞다. */
   placePad(key) {
     const cell = this.cells[key];
     if (!cell || !cell.layer) return;
     const s = cell.section.getBoundingClientRect();
     const b = cell.listEl.getBoundingClientRect();
-    if (b.height < 1) return;
+    if (b.height < 1) { cell.layer.hidden = true; return; }
+
+    /* 적힌 것 중 가장 아래를 찾는다. 여러 단으로 나뉘어 있어도 그 아래가
+       비어 있는 자리다 — 단을 가로지르는 판은 두지 않는다. */
+    let top = b.top;
+    for (const item of cell.items) {
+      if (item.el.hidden) continue;
+      const r = item.el.getBoundingClientRect();
+      if (r.height > 0 && r.bottom > top) top = r.bottom;
+    }
+    const height = b.bottom - top;
+    cell.layer.hidden = height < PAD.minRoom;
+    if (cell.layer.hidden) return;
+
     const st = cell.layer.style;
     st.left = (b.left - s.left) + 'px';
-    st.top = (b.top - s.top) + 'px';
+    st.top = (top - s.top) + 'px';
     st.width = b.width + 'px';
-    st.height = b.height + 'px';
+    st.height = height + 'px';
   },
 
   /* `.cell-body`는 `overflow: hidden`이지만 **굴러가기는 한다.**
