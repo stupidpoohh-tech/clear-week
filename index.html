@@ -264,6 +264,7 @@
   .cell.free-cell .cell-label { letter-spacing: 0.06em; padding-bottom: 2px; }
 
   .sublabel, .sublabel-entry {
+    position: relative;               /* 획 SVG가 이 상자에 얹힌다 */
     font-family: inherit;
     font-size: var(--sublabel-font);
     font-weight: 600;                 /* 세미볼드 */
@@ -272,8 +273,10 @@
     padding: 2px 0 0;
     overflow-wrap: anywhere;
   }
+  /* 요일 아래 메모도 **긋는 몸**이다 (spec §4-6) — 항목과 같은 StrikeItem을
+     쓰되 옷은 `.sublabel`/`.sublabel-text`다. `.item`으로 세는 곳(훑어 지우기,
+     칸 넘침)에 끼어들지 않고, 크기·여백은 위 6.5pt 규칙을 그대로 물려받는다. */
   .sublabel { cursor: pointer; }
-  .sublabel:empty { display: none; }
   .sublabel-entry {
     width: 100%; border: none; background: none; outline: none;
     -webkit-user-select: text; user-select: text;
@@ -300,7 +303,7 @@
     break-inside: avoid;
     cursor: default;
   }
-  .item.purging { opacity: 0.3; }        /* 꾹 누른 뒤 드래그로 걸린 항목 */
+  .purging { opacity: 0.3; }             /* 꾹 누른 뒤 드래그로 걸린 항목 */
   .item-text { font-size: calc(var(--item-font) * var(--fs)); line-height: 1.45; overflow-wrap: anywhere; }
   .free .item-text, .free .entry { font-size: calc(var(--free-font) * var(--fs)); }
   .strike-svg {
@@ -309,7 +312,7 @@
     overflow: visible; pointer-events: none;
     transform-origin: 50% 50%;
   }
-  .item.pulse .strike-svg { animation: settle 120ms ease-out; }
+  .pulse .strike-svg { animation: settle 120ms ease-out; }
   @keyframes settle {
     0%   { transform: scale(1, 1); }
     40%  { transform: scale(1.01, 1.12); }
@@ -859,11 +862,16 @@ function weekTitle(monday) {
 
 /* 기기 사이에서 합치려면 "언제 고쳤는지"가 있어야 한다.
    `updatedAt`(항목) · `noteAt`(요일 메모) · `graves`(지운 항목 표시).
-   graves가 없으면 한쪽에서 지운 것이 다른 쪽에서 되살아난다. */
+   graves가 없으면 한쪽에서 지운 것이 다른 쪽에서 되살아난다.
+
+   `noteStrikes`는 요일 메모에 그은 획이다. 메모의 일부이므로 글자와 함께
+   `noteAt` 하나로 판가름난다 — 따로 시각을 두지 않는다 (spec §4-6). */
 function blankWeek(weekId) {
-  const days = {}, notes = {}, noteAt = {};
-  DAY_KEYS.forEach(k => { days[k] = []; notes[k] = ''; noteAt[k] = 0; });
-  return { weekId, days, notes, noteAt, graves: {} };
+  const days = {}, notes = {}, noteAt = {}, noteStrikes = {};
+  DAY_KEYS.forEach(k => {
+    days[k] = []; notes[k] = ''; noteAt[k] = 0; noteStrikes[k] = [];
+  });
+  return { weekId, days, notes, noteAt, noteStrikes, graves: {} };
 }
 
 /* 저장이 막혀 있으면(사파리 사생활 모드·용량 초과) 알려야 한다.
@@ -897,6 +905,9 @@ function loadWeek(weekId) {
     DAY_KEYS.forEach(k => {
       week.notes[k] = w.notes && typeof w.notes[k] === 'string' ? w.notes[k] : '';
       week.noteAt[k] = Number(w.noteAt && w.noteAt[k]) || 0;
+      /* 예전에 저장된 주에는 없다 — 안 그은 것으로 본다 */
+      week.noteStrikes[k] = Array.isArray(w.noteStrikes && w.noteStrikes[k])
+        ? w.noteStrikes[k] : [];
       const list = w.days && Array.isArray(w.days[k]) ? w.days[k] : [];
       week.days[k] = list.map(it => ({
         id: it.id || String(++uidSeq),
@@ -928,6 +939,7 @@ function sameWeek(a, b) {
     (w.days[k] || []).map(it => [it.id, it.text, !!it.struck,
       (it.strikes || []).map(s => [s.line, s.a, s.b, s.seed])]),
     w.notes ? (w.notes[k] || '') : '',
+    ((w.noteStrikes && w.noteStrikes[k]) || []).map(s => [s.line, s.a, s.b, s.seed]),
   ]));
   return shape(a) === shape(b);
 }
@@ -1425,16 +1437,19 @@ const Sound = {
       획은 시드 + 줄 안에서의 시작·끝 비율로만 저장된다.
    ═══════════════════════════════════════════════════════════════ */
 class StrikeItem {
-  constructor(data, host) {
+  /* cls — 이 몸에 입힐 옷. 항목은 `item`, 요일 아래 메모는 `sublabel`.
+     **메모는 항목이 아니다** — `.item`으로 세는 곳(훑어 지우기, 칸 넘침)에
+     끼어들면 안 되므로 옷을 달리 입힌다 (spec §4-6). */
+  constructor(data, host, cls = 'item') {
     this.data = data;      // { id, text, struck, createdAt, strikes: [] }
     this.host = host;      // { save(), edit(item), remove(item) }
 
     this.el = document.createElement('div');
-    this.el.className = 'item';
+    this.el.className = cls;
     this.el._strikeItem = this;        /* 드래그로 훑을 때 되찾기 위해 */
 
     this.textEl = document.createElement('span');
-    this.textEl.className = 'item-text';
+    this.textEl.className = cls + '-text';   // item-text · sublabel-text
     this.textEl.textContent = data.text;
 
     this.svg = document.createElementNS(NS, 'svg');
@@ -2172,12 +2187,11 @@ const App = {
     label.className = 'cell-label';
     label.textContent = cellLabel(key, this.monday);
 
-    const sub = document.createElement('div');
-    sub.className = 'sublabel';
-    sub.textContent = this.week.notes[key] || '';
+    /* 메모는 div가 아니라 **항목 하나**다 — 그래야 그을 수 있다 (spec §4-6) */
+    const sub = this.makeNote(key);
 
     gutter.appendChild(label);
-    gutter.appendChild(sub);
+    gutter.appendChild(sub.el);
     section.appendChild(gutter);
     section.appendChild(listEl);
 
@@ -2185,8 +2199,14 @@ const App = {
       /* 왼쪽 여백(날짜와 그 아래)을 누르면 **요일 아래 메모**를 적는다.
          예전에는 라벨을 살짝 눌러 항목을 만들고, 꾹 눌러 아래로 끌어 메모를 열었다.
          둘 다 물렸다 — 누르는 자리와 적히는 자리가 어긋나 있었다 (spec §4-2).
-         지금은 **누른 자리에 적힌다**: 여백이면 메모, 칸이면 항목, note면 note. */
-      gutter.addEventListener('click', () => this.openSublabel(key, gutter, sub));
+         지금은 **누른 자리에 적힌다**: 여백이면 메모, 칸이면 항목, note면 note.
+
+         메모 글자 위는 그 항목의 제스처 자리다 — 긋고, 지우고, 탭하면 고친다.
+         여기서 가로채면 그은 다음 손을 떼는 순간 입력창이 열린다. */
+      gutter.addEventListener('click', e => {
+        if (e.target.closest('.sublabel')) return;
+        this.openSublabel(key);
+      });
 
       /* 칸의 빈 곳을 눌러도 그 칸에 적힌다. 라벨만 누르게 하면 과녁이 너무 작다.
          항목·라벨·입력창 위는 각자의 제스처가 있으므로 건드리지 않고,
@@ -2217,8 +2237,54 @@ const App = {
       return item;
     });
 
-    this.cells[key] = { section, listEl, items, sub, mark: null };
+    this.cells[key] = { section, listEl, items, sub, gutter, mark: null };
     return section;
+  },
+
+  /* ── 요일 아래 메모 = 항목 하나 ───────────────────────────
+     글자는 `notes[key]`, 획은 `noteStrikes[key]`에 그대로 담긴다.
+     `data.strikes`가 그 배열 **자체**라서 StrikeItem이 밀고 빼는 것이
+     곧 주 데이터가 된다 — 옮겨 담는 자리가 없으니 어긋날 자리도 없다. */
+  noteData(key) {
+    const strikes = this.week.noteStrikes[key];
+    return {
+      id: 'note:' + key,
+      text: this.week.notes[key] || '',
+      struck: strikes.length > 0,
+      createdAt: 0,
+      strikes,
+    };
+  },
+
+  makeNote(key) {
+    const item = new StrikeItem(this.noteData(key), {
+      /* 그은 것도 지운 것도 메모를 고친 것이다 — 합칠 때 쓸 시각을 올린다 */
+      save: () => { this.week.noteAt[key] = Date.now(); this.save(); },
+      edit: () => this.openSublabel(key),
+      add: () => this.openSublabel(key),     // 글자 옆 빈 자리
+      remove: () => this.clearNote(key),     // 롱프레스 = 메모를 지운다
+    }, 'sublabel');
+    item.el.hidden = !item.data.text;        // 빈 메모는 자리를 차지하지 않는다
+    return item;
+  },
+
+  /* 롱프레스·훑기로 메모를 지운다. 항목과 달리 무덤(graves)은 없다 —
+     메모는 주마다 하나뿐이라 빈 글자가 곧 지웠다는 뜻이다. */
+  clearNote(key) {
+    const cell = this.cells[key];
+    if (!cell) return;
+    Log.ev('note', 'clear', 0);
+    cell.sub.clearStrokes();
+    cell.sub.data.strikes.length = 0;
+    cell.sub.data.struck = false;
+    cell.sub.data.text = '';
+    cell.sub.textEl.textContent = '';
+    cell.sub.el.classList.remove('purging');
+    cell.sub.el.hidden = true;
+    this.week.notes[key] = '';
+    this.week.noteAt[key] = Date.now();
+    this.save();
+    this.updateOverflow(key);
   },
 
   makeItem(data, dayKey, listEl) {
@@ -2237,8 +2303,14 @@ const App = {
     cell.listEl.scrollLeft = 0;      // 입력 중 밀려 있던 가로 위치를 되돌린다
     cell.listEl.scrollTop = 0;
     this.fitColumns(key);
-    cell.items.forEach(item => { item.clearStrokes(); item.restore(); });
+    this.redraw(cell);
     this.updateOverflow(key);
+  },
+
+  /* 칸이 다시 짜였으면 그 칸의 획을 다시 그린다 — 요일 메모의 획도 그 칸의 것이다 */
+  redraw(cell) {
+    cell.items.forEach(item => { item.clearStrokes(); item.restore(); });
+    if (cell.sub) { cell.sub.clearStrokes(); cell.sub.restore(); }
   },
 
   /* 한 열에 다 들어가면 한 열로 둔다. 넘치면 하나 늘려 다시 재 본다.
@@ -2263,9 +2335,7 @@ const App = {
     const cols = this.fitColumns(key);
     /* 두 단 이상으로 나뉜 것만 알린다. 한 단은 보통이라 셀 가치가 없다 */
     if (cols > 1) this.note1('split:' + key, () => Log.ev('split', '', cols, cell.items.length));
-    if (cell.listEl.style.columnCount !== before) {
-      cell.items.forEach(item => { item.clearStrokes(); item.restore(); });
-    }
+    if (cell.listEl.style.columnCount !== before) this.redraw(cell);
     this.updateOverflow(key);
   },
 
@@ -2716,8 +2786,14 @@ const App = {
   },
 
   /* ── 요일 아래 메모 — 6.5pt 세미볼드 ─────────────────────── */
-  openSublabel(key, gutter, sub) {
+  openSublabel(key) {
+    const cell = this.cells[key];
+    if (!cell) return;
+    const { gutter, sub } = cell;
     if (gutter.querySelector('.sublabel-entry')) return;
+    /* 그어진 것은 고치지 못한다 — 항목과 같은 규칙이다 (spec §4-6).
+       지우개로 문대거나 꾹 눌러 지운 다음에야 다시 적을 수 있다. */
+    if (sub.data.struck) return;
 
     const input = document.createElement('input');
     input.className = 'sublabel-entry';
@@ -2736,8 +2812,9 @@ const App = {
       this.week.notes[key] = text;
       this.week.noteAt[key] = Date.now();
       Log.ev('note', text ? 'set' : 'clear', text.length);
-      sub.textContent = text;
-      sub.hidden = false;
+      sub.data.text = text;
+      sub.textEl.textContent = text;
+      sub.el.hidden = !text;
       this.save();
       this.updateOverflow(key);      // 메모가 한 줄 차지하면 항목이 밀린다
     };
@@ -2748,7 +2825,7 @@ const App = {
     keepText(input, commit);
     typeSound(input);
 
-    sub.hidden = true;
+    sub.el.hidden = true;
     gutter.appendChild(input);
     input.focus();
     input.setSelectionRange(input.value.length, input.value.length);

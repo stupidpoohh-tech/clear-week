@@ -483,6 +483,135 @@ await page.waitForTimeout(250);
   await page.waitForTimeout(250);
 }
 
+console.log('\n── 요일 아래 메모 긋기 ──');
+/* 메모도 **긋는 몸**이다 — 항목과 같은 StrikeItem을 쓴다 (spec §4-6).
+   긋기·지우개·자동 긋기·롱프레스가 그대로 따라오되, 항목으로 세어지지는 않는다. */
+{
+  const noteBox = key => page.evaluate(k => {
+    const r = App.cells[k].sub.textEl.getClientRects()[0];
+    return { x: r.x, y: r.y, w: r.width, h: r.height };
+  }, key);
+  const setNote = async (key, text) => {
+    await page.evaluate(([k, t]) => {
+      App.week.notes[k] = t; App.week.noteAt[k] = Date.now();
+      App.week.noteStrikes[k] = []; App.save(); App.render();
+    }, [key, text]);
+    await page.waitForTimeout(250);
+  };
+  const drawNote = async key => {
+    const r = await noteBox(key);
+    const y = r.y + r.h / 2;
+    await page.mouse.move(r.x + 1, y); await page.mouse.down();
+    for (let i = 1; i <= 12; i++) { await page.mouse.move(r.x + 1 + (r.w - 2) * (i / 12), y); await page.waitForTimeout(8); }
+    await page.mouse.up(); await page.waitForTimeout(400);
+  };
+
+  await setNote('tue', '휴가');
+  check('빈 메모는 자리를 차지하지 않는다', await page.evaluate(() => {
+    App.week.notes.sat = ''; App.render();
+    return App.cells.sat.sub.el.hidden;
+  }), true);
+  await page.waitForTimeout(200);
+
+  await drawNote('tue');
+  check('메모 글자 위를 그으면 획이 남는다',
+    await page.evaluate(() => App.week.noteStrikes.tue.length), 1);
+  check('그은 것은 메모의 시각을 올린다 — 합칠 때 쓴다',
+    await page.evaluate(() => App.week.noteAt.tue > 0), true);
+  check('글자는 그대로 남는다 — 취소선은 삭제가 아니다',
+    await page.evaluate(() => App.week.notes.tue), '휴가');
+
+  /* 획은 시드 + 줄 안에서의 비율로만 저장된다 — 새로고침해도 같은 자리에 온다 */
+  await page.reload();
+  await page.waitForTimeout(500);
+  check('새로고침해도 메모의 획이 복원된다',
+    await page.evaluate(() => App.cells.tue.sub.strokes.length), 1);
+
+  /* 그어진 항목이 편집 불가인 것과 같은 규칙 */
+  const r = await noteBox('tue');
+  await page.mouse.click(r.x + r.w / 2, r.y + r.h / 2);
+  await page.waitForTimeout(450);
+  check('그어진 메모는 탭해도 안 열린다', await page.locator('.sublabel-entry').count(), 0);
+  check('그때 항목 입력창도 안 열린다', await page.locator('.entry').count(), 0);
+  /* 글자 위만이 아니다 — 여백을 눌러도 열리면 안 된다.
+     여백 탭은 "메모를 적는다"는 뜻인데, 그어진 메모는 고칠 수 없다 (spec §4-6) */
+  {
+    const q = await page.evaluate(() => {
+      const b = App.cells.tue.gutter.getBoundingClientRect();
+      return { x: b.x + b.width / 2, y: b.y + b.height - 6 };
+    });
+    await page.mouse.click(q.x, q.y);
+    await page.waitForTimeout(300);
+    check('그어져 있으면 여백을 눌러도 안 열린다',
+      await page.locator('.sublabel-entry').count(), 0);
+  }
+
+  /* 훑어 지우기는 **항목**의 것이다. 메모는 옷이 달라 끌려가지 않는다 */
+  await page.evaluate(() => {
+    const now = Date.now();
+    App.week.days.tue = ['가', '나'].map((t, i) => ({
+      id: 'sweep' + i, text: t, struck: false, createdAt: now + i, updatedAt: now + i, strikes: [],
+    }));
+    App.save(); App.render();
+  });
+  await page.waitForTimeout(300);
+  {
+    const first = await cell(1).locator('.item').first().boundingBox();
+    const last = await cell(1).locator('.item').last().boundingBox();
+    await page.mouse.move(first.x + first.width / 2, first.y + first.height / 2);
+    await page.mouse.down();
+    await page.waitForTimeout(700);                 // 롱프레스
+    await page.mouse.move(last.x + last.width / 2, last.y + last.height / 2, { steps: 8 });
+    const g = await page.evaluate(() => {
+      const q = App.cells.tue.gutter.getBoundingClientRect();
+      return { x: q.x + q.width / 2, y: q.y + q.height / 2 };
+    });
+    await page.mouse.move(g.x, g.y, { steps: 8 });  // 메모 위까지 훑어 본다
+    await page.mouse.up();
+    await page.waitForTimeout(350);
+    check('훑어 지우기가 항목을 지운다', await days('tue'), []);
+    check('훑어도 메모는 남는다 — 메모는 항목이 아니다',
+      await page.evaluate(() => App.week.notes.tue), '휴가');
+  }
+
+  /* 더블탭 = 남은 줄까지 자동으로 긋기. 메모에서도 같다 */
+  await setNote('tue', '치과');
+  const d = await noteBox('tue');
+  await page.mouse.dblclick(d.x + d.w / 2, d.y + d.h / 2);
+  await page.waitForTimeout(800);
+  check('메모도 더블탭으로 그어진다',
+    await page.evaluate(() => App.week.noteStrikes.tue.length), 1);
+
+  /* 롱프레스 = 메모를 지운다. 글자와 획이 함께 사라진다 */
+  await page.mouse.move(d.x + d.w / 2, d.y + d.h / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(700);
+  await page.mouse.up();
+  await page.waitForTimeout(350);
+  check('꾹 누르면 메모가 지워진다', await page.evaluate(() =>
+    [App.week.notes.tue, App.week.noteStrikes.tue.length, App.cells.tue.sub.el.hidden]),
+    ['', 0, true]);
+
+  /* 지운 자리는 다시 적을 수 있어야 한다 — 그어진 채로 막혀 있으면 안 된다 */
+  {
+    const q = await page.evaluate(() => {
+      const b = App.cells.tue.gutter.getBoundingClientRect();
+      return { x: b.x + b.width / 2, y: b.y + b.height - 6 };
+    });
+    await page.mouse.click(q.x, q.y);
+    await page.waitForTimeout(300);
+    check('지운 뒤에는 다시 적을 수 있다', await page.locator('.sublabel-entry').count(), 1);
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(250);
+  }
+
+  await page.evaluate(() => {
+    App.week.notes.tue = ''; App.week.noteStrikes.tue = []; App.week.noteAt.tue = Date.now();
+    App.week.days.tue = []; App.save(); App.render();
+  });
+  await page.waitForTimeout(250);
+}
+
 console.log('\n── 편집 · 삭제 ──');
 await cell(3).locator('.item').nth(1).locator('.item-text').click();
 await page.waitForTimeout(420);
@@ -931,6 +1060,35 @@ await phone.evaluate(() => Sync.push());
 await phone.waitForTimeout(600);
 check('지운 것이 되살아나지 않는다',
   await phone.evaluate(() => App.week.days.mon.map(i => i.text)), ['PC에서 적음']);
+
+/* 요일 메모의 획도 기기 사이를 건넌다 — 글자와 한 몸으로 (spec §4-6) */
+{
+  await page.evaluate(() => {
+    App.week.notes.thu = '월말 정산';
+    App.week.noteAt.thu = Date.now();
+    App.week.noteStrikes.thu = [];
+    App.save(); App.render();
+  });
+  await page.waitForTimeout(1500);
+  await phone.evaluate(() => Sync.push());
+  await phone.waitForTimeout(700);
+  check('메모가 다른 기기로 건너간다',
+    await phone.evaluate(() => App.week.notes.thu), '월말 정산');
+
+  await page.evaluate(() => {
+    App.week.noteStrikes.thu.push({ line: 0, a: 0.02, b: 0.98, seed: 4242 });
+    App.cells.thu.sub.data.struck = true;
+    App.week.noteAt.thu = Date.now();
+    App.save();
+  });
+  await page.waitForTimeout(1500);
+  await phone.evaluate(() => Sync.push());
+  await phone.waitForTimeout(700);
+  check('메모에 그은 획도 건너간다', await phone.evaluate(() =>
+    [App.week.noteStrikes.thu.length, App.week.notes.thu]), [1, '월말 정산']);
+  check('받은 쪽에서도 실제로 그어져 보인다',
+    await phone.evaluate(() => App.cells.thu.sub.strokes.length), 1);
+}
 
 /* 밀어 올리는 중에 그은 획이 사라지던 일 (2026-08-20).
    올린 것에는 없는 획이 응답에 없으니, 그 응답을 그대로 받으면 획이 지워졌다.

@@ -94,10 +94,20 @@ export async function readResetAt(env, email) {
 /* ── 주 데이터 ─────────────────────────────────────────────── */
 
 export function blankWeek(weekId) {
-  const days = {}, notes = {}, noteAt = {};
-  DAY_KEYS.forEach(k => { days[k] = []; notes[k] = ''; noteAt[k] = 0; });
-  return { weekId, days, notes, noteAt, graves: {} };
+  const days = {}, notes = {}, noteAt = {}, noteStrikes = {};
+  DAY_KEYS.forEach(k => {
+    days[k] = []; notes[k] = ''; noteAt[k] = 0; noteStrikes[k] = [];
+  });
+  return { weekId, days, notes, noteAt, noteStrikes, graves: {} };
 }
+
+/* 획 하나 = 줄 번호 + 그 줄 안에서의 시작·끝 비율 + 시드. 좌표는 담지 않는다 */
+const strikeList = (raw, max) => (Array.isArray(raw) ? raw.slice(0, max).map(s => ({
+  line: Number(s && s.line) || 0,
+  a: Number(s && s.a) || 0,
+  b: Number(s && s.b) || 0,
+  seed: Number(s && s.seed) || 0,
+})) : []);
 
 /* 바깥에서 들어온 것은 모양을 믿지 않는다 */
 export function sanitizeWeek(raw, weekId) {
@@ -111,15 +121,12 @@ export function sanitizeWeek(raw, weekId) {
       struck: !!(it && it.struck),
       createdAt: ts(it && it.createdAt),
       updatedAt: ts(it && it.updatedAt) || ts(it && it.createdAt),
-      strikes: Array.isArray(it && it.strikes) ? it.strikes.slice(0, 40).map(s => ({
-        line: Number(s && s.line) || 0,
-        a: Number(s && s.a) || 0,
-        b: Number(s && s.b) || 0,
-        seed: Number(s && s.seed) || 0,
-      })) : [],
+      strikes: strikeList(it && it.strikes, 40),
     })).filter(it => it.id);
     w.notes[k] = raw.notes && typeof raw.notes[k] === 'string' ? raw.notes[k].slice(0, 200) : '';
     w.noteAt[k] = ts(raw.noteAt && raw.noteAt[k]);
+    /* 메모는 200자까지라 줄이 많아야 몇 개다 — 8이면 넉넉하다 */
+    w.noteStrikes[k] = strikeList(raw.noteStrikes && raw.noteStrikes[k], 8);
   });
   const graves = raw.graves && typeof raw.graves === 'object' ? raw.graves : {};
   for (const id of Object.keys(graves).slice(0, 2000)) {
@@ -158,9 +165,12 @@ export function mergeWeek(a, b, now = Date.now()) {
       .filter(it => !(out.graves[it.id] && out.graves[it.id] >= ts(it.updatedAt)))
       .sort((x, y) => ts(x.createdAt) - ts(y.createdAt) || String(x.id).localeCompare(String(y.id)));
 
+    /* 메모는 글자와 획이 한 몸이다 — 나중에 고친 쪽을 통째로 따른다.
+       따로 합치면 이쪽 글자에 저쪽 획이 얹혀 엉뚱한 줄이 그어진다 (spec §4-6). */
     const an = ts(a.noteAt && a.noteAt[k]), bn = ts(b.noteAt && b.noteAt[k]);
     const win = bn > an ? b : a;
     out.notes[k] = (win.notes && win.notes[k]) || '';
+    out.noteStrikes[k] = strikeList(win.noteStrikes && win.noteStrikes[k], 8);
     out.noteAt[k] = Math.max(an, bn);
   }
 

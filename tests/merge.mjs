@@ -84,6 +84,40 @@ check('메모를 비운 것도 반영된다',
     T + 99).notes.mon,
   '');
 
+/* 메모의 획은 **글자와 한 몸**이다 — 따로 합치면 이쪽 글자에 저쪽 획이
+   얹혀 엉뚱한 자리에 줄이 간다 (spec §4-6) */
+const noteWeek = (text, at, strikes = []) => week([], {
+  notes: { ...blankWeek('x').notes, mon: text },
+  noteAt: { ...blankWeek('x').noteAt, mon: at },
+  noteStrikes: { ...blankWeek('x').noteStrikes, mon: strikes },
+});
+const S = (a, b) => ({ line: 0, a, b, seed: 7 });
+
+check('메모의 획도 나중에 고친 쪽을 따른다',
+  mergeWeek(noteWeek('8/20 마감', T, [S(0, 1)]), noteWeek('8/20 마감', T + 5, []), T + 99).noteStrikes.mon,
+  []);
+
+check('그은 쪽이 나중이면 획이 남는다',
+  mergeWeek(noteWeek('8/20 마감', T, []), noteWeek('8/20 마감', T + 5, [S(0, 1)]), T + 99).noteStrikes.mon,
+  [S(0, 1)]);
+
+check('글자와 획은 같은 쪽에서 온다',
+  (w => [w.notes.mon, w.noteStrikes.mon.length])(
+    mergeWeek(noteWeek('옛 글자', T + 5, [S(0, 1)]), noteWeek('새 글자', T, [S(0, 0.4), S(1, 1)]), T + 99)),
+  ['옛 글자', 1]);
+
+check('예전에 저장된 주에는 획 자리가 없다 — 빈 것으로 본다',
+  mergeWeek({ ...blankWeek('2026-W34'), noteStrikes: undefined },
+            noteWeek('8/20 마감', T, []), T + 99).noteStrikes.mon, []);
+
+check('바깥에서 온 획도 모양을 믿지 않는다',
+  sanitizeWeek({ noteStrikes: { mon: [{ line: '2', a: 'x', b: 1, seed: 3, 몰래: '치과' }] } },
+               '2026-W34').noteStrikes.mon,
+  [{ line: 2, a: 0, b: 1, seed: 3 }]);
+
+check('메모 획은 여덟 개까지', sanitizeWeek(
+  { noteStrikes: { mon: Array.from({ length: 40 }, () => S(0, 1)) } }, '2026-W34').noteStrikes.mon.length, 8);
+
 console.log('\n── 합치기는 순서를 타지 않아야 한다 ──');
 {
   const a = week([item('a', '장보기', T), item('c', '운동', T + 30)], { graves: { z: T + 1 } });
