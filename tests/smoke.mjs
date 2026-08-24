@@ -828,6 +828,84 @@ console.log('\n── 지우개는 어중간한 상태를 남기지 않는다 �
   await page.waitForTimeout(250);
 }
 
+console.log('\n── 지우개는 넓다 ──');
+/* 손짓을 붙든 항목에만 갇혀 있어서, 넓게 문대도 한 줄씩밖에 안 지워졌다.
+   지우개는 **손가락 아래에 있는 것**을 지운다 (spec §4-2, 2026-08-24) */
+{
+  const seed = () => page.evaluate(() => {
+    const now = Date.now();
+    App.week.days.wed = ['메일 보내기', 'J42 확인', 'G46', '반려 처리'].map((text, i) => ({
+      id: 'rub' + i, text, struck: true, createdAt: now + i, updatedAt: now + i,
+      strikes: [{ line: 0, a: 0.01, b: 0.99, seed: 1074304443 + i }],
+    }));
+    App.week.notes.wed = '회식'; App.week.noteAt.wed = now; App.week.noteStrikes.wed = [];
+    App.save(); App.render();
+  });
+  const left = () => page.evaluate(() => App.week.days.wed.map(i => i.strikes.length));
+  const masks = () => page.evaluate(() =>
+    App.cells.wed.items.reduce((n, it) => n + it.strokes.filter(s => s.mask).length, 0));
+  const band = () => page.evaluate(() => {
+    const rs = App.cells.wed.items.map(i => i.el.getBoundingClientRect());
+    return { top: rs[0].top + rs[0].height / 2,
+             bot: rs[rs.length - 1].top + rs[rs.length - 1].height / 2,
+             x0: rs[0].left + 4, x1: Math.max(...rs.map(r => r.right)) - 4 };
+  });
+  /* 좌우로 오가며, 패스마다 높이를 옮긴다 — 넓은 면을 문대는 손짓 */
+  const wipe = async (b, passes, span = 1) => {
+    await page.mouse.move(b.x0, b.top); await page.mouse.down();
+    for (let n = 0; n < passes; n++) {
+      const y = b.top + (b.bot - b.top) * ((n % 3) / 2);
+      const w = (b.x1 - b.x0) * span, x0 = b.x0 + ((b.x1 - b.x0) - w) / 2;
+      for (let i = 1; i <= 22; i++) {
+        const t = i / 22;
+        await page.mouse.move(n % 2 ? x0 + w - w * t : x0 + w * t, y);
+        await page.waitForTimeout(5);
+      }
+    }
+    await page.mouse.up(); await page.waitForTimeout(600);
+  };
+
+  await seed(); await page.waitForTimeout(450);
+  check('네 항목이 다 그어져 있다', await left(), [1, 1, 1, 1]);
+  await wipe(await band(), 6);
+  check('넓게 문대면 한 손짓에 여러 줄이 지워진다', await left(), [0, 0, 0, 0]);
+  check('그래도 요일 메모는 딸려 가지 않는다', await page.evaluate(() =>
+    [App.week.notes.wed, App.week.noteStrikes.wed.length]), ['회식', 0]);
+
+  /* 한 줄만 문대면 이웃은 그대로다 — 넓어진다고 흘러넘치면 안 된다 */
+  await seed(); await page.waitForTimeout(450);
+  {
+    const r = await page.evaluate(() => {
+      const q = App.cells.wed.items[1].el.getBoundingClientRect();
+      return { y: q.top + q.height / 2, x0: q.left + 4, x1: q.right - 4 };
+    });
+    await page.mouse.move(r.x0, r.y); await page.mouse.down();
+    for (let n = 0; n < 4; n++) {
+      for (let i = 1; i <= 16; i++) {
+        const t = i / 16;
+        await page.mouse.move(n % 2 ? r.x1 - (r.x1 - r.x0) * t : r.x0 + (r.x1 - r.x0) * t, r.y);
+        await page.waitForTimeout(5);
+      }
+    }
+    await page.mouse.up(); await page.waitForTimeout(600);
+  }
+  check('한 줄만 문대면 그 줄만 지워진다', await left(), [1, 0, 1, 1]);
+
+  /* 어중간한 상태를 남기지 않는 규칙은 **닿은 항목 전부**에 걸린다.
+     손을 뗄 때 주인만 정리하면 남의 항목에 벗겨진 잉크가 남는다. */
+  await seed(); await page.waitForTimeout(450);
+  await wipe(await band(), 3, 0.12);
+  check('여럿을 덜 문댔으면 전부 온전히 돌아온다', await left(), [1, 1, 1, 1]);
+  check('닿았던 항목 어디에도 잔흔이 없다', await masks(), 0);
+
+  await page.evaluate(() => {
+    App.week.days.wed = []; App.week.notes.wed = '';
+    App.week.noteStrikes.wed = []; App.week.noteAt.wed = Date.now();
+    App.save(); App.render();
+  });
+  await page.waitForTimeout(250);
+}
+
 console.log('\n── 칸이 스스로 나뉜다 ──');
 /* 한 열에 몇 줄이 들어가는지는 화면 높이가 정한다. 그래서 개수를 못 박고 검사하지 않고,
    "넘칠 때만 나뉜다"는 성질을 검사한다. */

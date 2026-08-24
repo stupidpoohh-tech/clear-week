@@ -582,6 +582,7 @@ const STROKE = {
 /* ── 지우개 ────────────────────────────────────────────────── */
 const ERASE = {
   radius: 16,            // 지우개 반경 (px) — 문지른 자리 주변이 지워짐
+  reachPx: 14,           // 줄 위아래 이만큼까지는 그 줄을 문대는 것으로 친다
   passStrength: 0.55,    // 한 번 지나갈 때 지워지는 정도 (0~1)
   doneThreshold: 0.85,   // 한 구간이 이 값을 넘으면 그 구간은 지워진 것
   finishRatio: 0.7,      // 손을 뗄 때 이 비율 이상 지워졌으면 마저 지운다
@@ -1552,7 +1553,7 @@ class StrikeItem {
       const d = Math.abs(y - s.cy);
       if (d < bd) { bd = d; best = s; }
     }
-    return best && bd <= best.halfH + 14 ? best : null;
+    return best && bd <= best.halfH + ERASE.reachPx ? best : null;
   }
 
   /* ── 제스처 ──────────────────────────────────────────────── */
@@ -1575,7 +1576,9 @@ class StrikeItem {
       moved: 0, speed: 0,
       mode: null,               // null | draw | erase | scroll
       active: null, grain: null, seed: 0,
-      dirX: 0, trail: null, trailStroke: null, trailD: '', passTouched: null,
+      /* 문대는 손이 닿은 항목마다 자기 자국을 갖는다 — 자국(mask)은 그 항목의
+         `<defs>` 안에 있어서 남의 것을 쓸 수 없다 (spec §4-2) */
+      dirX: 0, rubs: new Map(), passTouched: null,
       longPress: from ? null : setTimeout(() => {
         const p = this.pointer;
         if (!p) return;
@@ -1638,7 +1641,7 @@ class StrikeItem {
       this.addSample(p, e.clientX, e.clientY);
       Sound.scratch(p.speed);
     } else if (p.mode === 'erase') {
-      this.trackErase(p, e.clientX - p.rowRect.left, e.clientY - p.rowRect.top, stepX);
+      this.trackErase(p, e.clientX, e.clientY, stepX);
       Sound.scratch(p.speed);
     }
 
@@ -1661,7 +1664,7 @@ class StrikeItem {
       return;
     }
     if (p.mode === 'draw') { this.finishDraw(p); return; }
-    if (p.mode === 'erase') { this.settleErase(); return; }
+    if (p.mode === 'erase') { this.settleErase(p); return; }
     if (p.mode === 'pass') return;
 
     if (p.moved >= 10) return;
@@ -1691,7 +1694,7 @@ class StrikeItem {
     if (!p) return;
     if (p.longPress) clearTimeout(p.longPress);
     Gesture.busy = Math.max(0, Gesture.busy - 1);
-    if (p.mode === 'erase') this.settleErase();
+    if (p.mode === 'erase') this.settleErase(p);
     this.pointer = null;
     Sound.silence();
     if (p.mode === 'purge') {
@@ -1903,29 +1906,49 @@ class StrikeItem {
     return t;
   }
 
-  trackErase(p, x, y, stepX) {
-    /* 좌우 방향이 바뀌면 새 패스 — 같은 자리를 오갈수록 더 지워진다 */
+  /* **지우개는 손가락 아래에 있는 것을 지운다 — 시작한 항목만이 아니라.**
+     예전에는 손짓을 붙든 항목에만 갇혀 있어서, 넓게 문대도 한 줄씩밖에 안
+     지워졌다. 여러 줄을 지우려면 손짓을 여러 번 해야 했다 (spec §4-2).
+     훑어 지우기와 같은 방식으로 그 자리에 있는 항목을 찾는다 —
+     `.item`으로만 찾으므로 요일 아래 메모는 딸려 가지 않는다. */
+  trackErase(p, clientX, clientY, stepX) {
+    /* 좌우 방향이 바뀌면 새 패스 — 같은 자리를 오갈수록 더 지워진다.
+       닿았던 항목의 자국을 **모두** 끊는다. 한 손짓이 여러 항목에 걸쳐 있다. */
     if (stepX !== 0) {
       const dir = stepX > 0 ? 1 : -1;
       if (dir !== p.dirX) {
         p.dirX = dir;
-        p.trail = null;
+        p.rubs.forEach(r => { r.trail = null; r.stroke = null; });
         p.passTouched = new Set();
       }
     }
 
+    const under = document.elementFromPoint(clientX, clientY);
+    const row = under && under.closest ? under.closest('.item') : null;
+    const item = (row && row._strikeItem) || this;
+    item.rubAt(p, clientX, clientY);
+  }
+
+  /* 이 항목 안에서 그 자리의 획을 문댄다. 손짓의 주인이 아니어도 불린다 */
+  rubAt(p, clientX, clientY) {
+    let r = p.rubs.get(this);
+    if (!r) { r = { trail: null, stroke: null, d: '' }; p.rubs.set(this, r); }
+
+    const rect = this.el.getBoundingClientRect();
+    const x = clientX - rect.left, y = clientY - rect.top;
+
     const s = this.strokeAt(y);
-    if (!s) { p.trail = null; p.trailStroke = null; return; }
+    if (!s) { r.trail = null; r.stroke = null; return; }
     this.ensureErasable(s);
 
-    if (!p.trail || p.trailStroke !== s) {
-      p.trail = this.newTrail(s);
-      p.trailStroke = s;
-      p.trailD = 'M' + x.toFixed(1) + ' ' + y.toFixed(1);
+    if (!r.trail || r.stroke !== s) {
+      r.trail = this.newTrail(s);
+      r.stroke = s;
+      r.d = 'M' + x.toFixed(1) + ' ' + y.toFixed(1);
     } else {
-      p.trailD += 'L' + x.toFixed(1) + ' ' + y.toFixed(1);
+      r.d += 'L' + x.toFixed(1) + ' ' + y.toFixed(1);
     }
-    p.trail.setAttribute('d', p.trailD);
+    r.trail.setAttribute('d', r.d);
 
     const i0 = clamp(Math.floor((x - ERASE.radius - s.minX) / ERASE.bucketPx),
                      0, s.buckets.length - 1);
@@ -1942,7 +1965,7 @@ class StrikeItem {
     for (let i = 0; i < s.buckets.length; i++) {
       if (s.buckets[i] < ERASE.doneThreshold) return;
     }
-    p.trail = null; p.trailStroke = null;
+    r.trail = null; r.stroke = null;
     this.removeStroke(s);
   }
 
@@ -1950,7 +1973,13 @@ class StrikeItem {
      거의 다 지웠으면 마저 지우고, 아니면 원래대로 되돌린다.
      양 끝은 문대는 손이 되돌아가는 자리라 한 번밖에 안 지나가서 늘 남았다 —
      그 잔흔이 "여러 번 지워도 흔적이 남는다"의 정체다. */
-  settleErase() {
+  /* 손을 뗄 때 **닿았던 항목을 모두** 정리한다. 한 손짓이 여럿에 걸쳐 있다 */
+  settleErase(p) {
+    if (p && p.rubs.size) { p.rubs.forEach((r, item) => item.settleOwn()); return; }
+    this.settleOwn();
+  }
+
+  settleOwn() {
     for (const s of this.strokes.slice()) {
       if (!s.buckets) continue;
       let done = 0;
