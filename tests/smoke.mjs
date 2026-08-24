@@ -1831,6 +1831,139 @@ console.log('\n── 방문자 행동로그 ──');
   check('켜면 기억도 바뀐다', await page.evaluate(() => localStorage['clearweek:sound']), 'on');
 }
 
+console.log('\n── 펜으로 크게 쓰기 ──');
+/* 아이패드의 손글씨 변환은 **포커스된 입력창 위에서만** 돈다. 9.5pt 줄 위에서는
+   팔이 안 펴진다 — 펜으로 빈 곳을 누르면 큰 입력창을 얹는다 (spec §4-7).
+   손가락은 예전 그대로다. */
+{
+  /* 진짜 pen 포인터는 CDP로만 만든다 — Playwright의 mouse는 늘 'mouse'다 */
+  const cdp = await page.context().newCDPSession(page);
+  const penTap = async (x, y) => {
+    for (const type of ['mousePressed', 'mouseReleased']) {
+      await cdp.send('Input.dispatchMouseEvent', {
+        type, x, y, button: 'left', clickCount: 1, pointerType: 'pen',
+        force: type === 'mousePressed' ? 0.5 : 0,
+      });
+    }
+    await page.waitForTimeout(300);
+  };
+  const emptySpot = key => page.evaluate(k => {
+    const r = App.cells[k].listEl.getBoundingClientRect();
+    return { x: r.x + r.width * 0.4, y: r.y + r.height - 14 };
+  }, key);
+  const padOpen = () => page.evaluate(() => !document.getElementById('scribble').hidden);
+  const texts = key => page.evaluate(k => App.week.days[k].map(i => i.text), key);
+
+  await page.evaluate(() => {
+    DAY_KEYS.forEach(k => { App.week.days[k] = []; });
+    App.week.graves = {}; App.save(); App.render();
+  });
+  await page.waitForTimeout(250);
+
+  let at = await emptySpot('thu');
+  await penTap(at.x, at.y);
+  check('펜으로 빈 곳을 누르면 큰 판이 열린다', await padOpen(), true);
+  check('그때 작은 줄은 안 열린다', await page.locator('.entry').count(), 0);
+  check('판 안 입력창에 손이 가 있다', await page.evaluate(() =>
+    document.activeElement === document.querySelector('.scribble-in')), true);
+  /* 크게 써야 변환이 쓸 만하다 — 항목 글자(9.5pt ≈ 12.7px)보다 훨씬 커야 한다 */
+  check('글자가 크다', await page.evaluate(() =>
+    parseFloat(getComputedStyle(document.querySelector('.scribble-in')).fontSize) >= 20), true);
+  /* 날짜는 덮지 않는다 — 어느 요일에 적는 중인지 보여야 한다 */
+  check('날짜를 덮지 않고 표 끝까지 간다', await page.evaluate(() => {
+    const p = document.getElementById('scribble').getBoundingClientRect();
+    const t = document.getElementById('weekBody').getBoundingClientRect();
+    const g = App.cells.thu.gutter.getBoundingClientRect();
+    return [p.left >= g.right - 1, Math.abs(p.right - t.right) < 2];
+  }), [true, true]);
+  /* 칸 안에 끼우지 않으므로 적힌 것들이 밀려나지 않는다 (spec §4-1의 그 함정) */
+  check('판은 칸 안에 들어 있지 않다', await page.evaluate(() =>
+    App.cells.thu.listEl.contains(document.getElementById('scribble'))), false);
+
+  await page.keyboard.type('매트하이브');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(300);
+  check('엔터로 그 요일에 항목이 된다', await texts('thu'), ['매트하이브']);
+  check('엔터 뒤에도 판은 열려 있다 — 이어서 쓴다', await padOpen(), true);
+  check('적은 것은 보통 크기로 남는다', await page.evaluate(() => {
+    const t = App.cells.thu.items[0].textEl;
+    return parseFloat(getComputedStyle(t).fontSize) < 20;
+  }), true);
+
+  /* 테두리를 눌러도 닫히면 안 된다 — 입력창이 판 안에 들어 있다 */
+  {
+    const edge = await page.evaluate(() => {
+      const r = document.getElementById('scribble').getBoundingClientRect();
+      return { x: r.left + 4, y: r.top + 4 };
+    });
+    await page.mouse.click(edge.x, edge.y);
+    await page.waitForTimeout(250);
+    check('판 테두리를 눌러도 안 닫힌다', await padOpen(), true);
+  }
+
+  await page.keyboard.type('두 번째');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(250);
+  check('이어서 쓴 것도 들어간다', await texts('thu'), ['매트하이브', '두 번째']);
+
+  await page.keyboard.press('Enter');       // 빈 채로 엔터 = 끝
+  await page.waitForTimeout(250);
+  check('빈 채로 엔터를 치면 닫힌다', await padOpen(), false);
+
+  /* 판 밖을 눌러도 적은 것은 잃지 않는다 (spec §4-1) */
+  at = await emptySpot('fri');
+  await penTap(at.x, at.y);
+  await page.keyboard.type('밖을 눌러 확정');
+  await page.locator('#weekTitle').click();
+  await page.waitForTimeout(350);
+  check('판 밖을 누르면 적은 것이 남고 닫힌다',
+    [await texts('fri'), await padOpen()], [['밖을 눌러 확정'], false]);
+
+  /* 열 때마다 손잡이가 쌓이면 한 번 적은 것이 여러 번 확정된다 */
+  at = await emptySpot('sat');
+  await penTap(at.x, at.y);
+  await page.keyboard.press('Enter');       // 그냥 닫는다
+  await page.waitForTimeout(250);
+  await penTap(at.x, at.y);
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(250);
+  at = await emptySpot('sat');
+  await penTap(at.x, at.y);
+  await page.keyboard.type('한 번만');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(300);
+  check('여러 번 열어도 한 번만 확정된다', await texts('sat'), ['한 번만']);
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(250);
+
+  /* note 칸도 같다 */
+  at = await emptySpot('free');
+  await penTap(at.x, at.y);
+  check('note 칸도 펜으로 크게 쓴다', await padOpen(), true);
+  await page.keyboard.type('노트에 크게');
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(300);
+  check('note에 들어간다', await texts('free'), ['노트에 크게']);
+
+  /* 손가락은 예전 그대로 — 작은 줄 하나 */
+  at = await emptySpot('sun');
+  await page.mouse.click(at.x, at.y);
+  await page.waitForTimeout(300);
+  check('손가락으로 누르면 예전처럼 작은 줄이 열린다',
+    [await page.locator('.entry').count(), await padOpen()], [1, false]);
+  await page.keyboard.press('Escape');
+  await page.locator('#weekTitle').click();
+  await page.waitForTimeout(250);
+
+  await cdp.detach();
+  await page.evaluate(() => {
+    DAY_KEYS.forEach(k => { App.week.days[k] = []; });
+    App.week.graves = {}; App.save(); App.render();
+  });
+  await page.waitForTimeout(250);
+}
+
 console.log('\n── 캘린더 연결 ──');
 /* 같은 사람이 만든 다른 웹앱(Dada Calendar)과 **새로 적은 일정만** 오간다 (spec §15).
    저쪽은 Firebase다. 여기서는 그 REST 세 곳을 가로채 흉내 낸다 —
