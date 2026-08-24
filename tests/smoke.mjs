@@ -1831,12 +1831,11 @@ console.log('\n── 방문자 행동로그 ──');
   check('켜면 기억도 바뀐다', await page.evaluate(() => localStorage['clearweek:sound']), 'on');
 }
 
-console.log('\n── 펜으로 크게 쓰기 ──');
-/* 아이패드의 손글씨 변환은 **포커스된 입력창 위에서만** 돈다. 9.5pt 줄 위에서는
-   팔이 안 펴진다 — 펜으로 빈 곳을 누르면 큰 입력창을 얹는다 (spec §4-7).
-   손가락은 예전 그대로다. */
+console.log('\n── 펜으로 바로 쓰기 ──');
+/* 아이패드 손글씨 변환은 **텍스트 입력창 위에서만** 돈다. 탭해서 입력창을
+   만든 다음에 쓰라고 하면 손이 한 번 더 간다 — 그래서 칸마다 투명한 입력창을
+   **미리 깔아 둔다.** 펜을 대는 순간 이미 거기 있다 (spec §4-7). */
 {
-  /* 진짜 pen 포인터는 CDP로만 만든다 — Playwright의 mouse는 늘 'mouse'다 */
   const cdp = await page.context().newCDPSession(page);
   const penTap = async (x, y) => {
     for (const type of ['mousePressed', 'mouseReleased']) {
@@ -1851,117 +1850,125 @@ console.log('\n── 펜으로 크게 쓰기 ──');
     const r = App.cells[k].listEl.getBoundingClientRect();
     return { x: r.x + r.width * 0.4, y: r.y + r.height - 14 };
   }, key);
-  const padOpen = () => page.evaluate(() => !document.getElementById('scribble').hidden);
+  const awake = key => page.evaluate(k => App.cells[k].layer.classList.contains('on'), key);
   const texts = key => page.evaluate(k => App.week.days[k].map(i => i.text), key);
+  const clear = async () => {
+    await page.evaluate(() => {
+      DAY_KEYS.forEach(k => { App.week.days[k] = []; });
+      App.week.graves = {}; App.save(); App.render();
+    });
+    await page.waitForTimeout(300);
+  };
 
-  await page.evaluate(() => {
-    DAY_KEYS.forEach(k => { App.week.days[k] = []; });
-    App.week.graves = {}; App.save(); App.render();
-  });
-  await page.waitForTimeout(250);
+  await clear();
 
-  let at = await emptySpot('thu');
-  await penTap(at.x, at.y);
-  check('펜으로 빈 곳을 누르면 큰 판이 열린다', await padOpen(), true);
-  check('그때 작은 줄은 안 열린다', await page.locator('.entry').count(), 0);
-  check('판 안 입력창에 손이 가 있다', await page.evaluate(() =>
-    document.activeElement === document.querySelector('.scribble-in')), true);
-  /* 크게 써야 변환이 쓸 만하다 — 항목 글자(9.5pt ≈ 12.7px)보다 훨씬 커야 한다 */
-  check('글자가 크다', await page.evaluate(() =>
-    parseFloat(getComputedStyle(document.querySelector('.scribble-in')).fontSize) >= 20), true);
-  /* 날짜는 덮지 않는다 — 어느 요일에 적는 중인지 보여야 한다 */
-  check('날짜를 덮지 않고 표 끝까지 간다', await page.evaluate(() => {
-    const p = document.getElementById('scribble').getBoundingClientRect();
-    const t = document.getElementById('weekBody').getBoundingClientRect();
+  check('칸마다 판이 깔려 있다', await page.evaluate(() =>
+    DAY_KEYS.filter(k => !App.cells[k].layer).length), 0);
+  check('평소에는 보이지 않는다', await page.evaluate(() => {
+    const c = getComputedStyle(App.cells.thu.layer);
+    return [c.color, c.caretColor, parseFloat(c.fontSize) <= 2];
+  }), ['rgba(0, 0, 0, 0)', 'rgba(0, 0, 0, 0)', true]);
+  /* 자판을 부르지 않는다 — 잘못 눌려도 화면이 덜컹거리지 않게 */
+  check('잠든 판은 자판을 부르지 않는다', await page.evaluate(() =>
+    App.cells.thu.layer.inputMode), 'none');
+
+  /* 판은 **적히는 자리**를 덮는다. 날짜 여백은 덮지 않는다 */
+  check('판이 적히는 자리를 덮는다', await page.evaluate(() => {
+    const l = App.cells.thu.layer.getBoundingClientRect();
+    const b = App.cells.thu.listEl.getBoundingClientRect();
     const g = App.cells.thu.gutter.getBoundingClientRect();
-    return [p.left >= g.right - 1, Math.abs(p.right - t.right) < 2];
-  }), [true, true]);
-  /* 칸 안에 끼우지 않으므로 적힌 것들이 밀려나지 않는다 (spec §4-1의 그 함정) */
-  check('판은 칸 안에 들어 있지 않다', await page.evaluate(() =>
-    App.cells.thu.listEl.contains(document.getElementById('scribble'))), false);
+    return [Math.abs(l.left - b.left) < 2, Math.abs(l.width - b.width) < 2,
+            Math.abs(l.height - b.height) < 2, l.left >= g.right - 1];
+  }), [true, true, true, true]);
+
+  /* 항목보다 아래에 깔린다 — 글자 위는 여전히 긋기의 자리다 */
+  await page.evaluate(() => {
+    const now = Date.now();
+    App.week.days.thu = [{ id: 'z1', text: '글자 위', struck: false,
+      createdAt: now, updatedAt: now, strikes: [] }];
+    App.save(); App.render();
+  });
+  await page.waitForTimeout(300);
+  check('글자 위를 짚으면 판이 아니라 항목이 잡힌다', await page.evaluate(() => {
+    const t = App.cells.thu.items[0].textEl.getBoundingClientRect();
+    const el = document.elementFromPoint(t.x + t.width / 2, t.y + t.height / 2);
+    return !!(el && el.closest('.item'));
+  }), true);
+  check('빈 곳을 짚으면 판이 잡힌다', await page.evaluate(() => {
+    const r = App.cells.thu.listEl.getBoundingClientRect();
+    const el = document.elementFromPoint(r.x + r.width * 0.4, r.bottom - 14);
+    return !!(el && el.classList.contains('pad-layer'));
+  }), true);
+  await clear();
+
+  /* **여기가 이 절의 핵심이다.** 스크리블은 포인터 없이 포커스만 준다 —
+     탭이 없어도 깨어나야 "그냥 바로 쓰는" 것이 된다. */
+  await page.evaluate(() => App.cells.thu.layer.focus());
+  await page.waitForTimeout(250);
+  check('탭 없이 포커스만 와도 깨어난다 (스크리블)', await awake('thu'), true);
+  check('깨어나면 글자가 커진다', await page.evaluate(() =>
+    parseFloat(getComputedStyle(App.cells.thu.layer).fontSize) >= 20), true);
+  check('깨어나면 자판도 부를 수 있다', await page.evaluate(() =>
+    App.cells.thu.layer.inputMode), 'text');
+  check('그때 작은 줄은 안 열린다', await page.locator('.entry').count(), 0);
 
   await page.keyboard.type('매트하이브');
   await page.keyboard.press('Enter');
   await page.waitForTimeout(300);
   check('엔터로 그 요일에 항목이 된다', await texts('thu'), ['매트하이브']);
-  check('엔터 뒤에도 판은 열려 있다 — 이어서 쓴다', await padOpen(), true);
-  check('적은 것은 보통 크기로 남는다', await page.evaluate(() => {
-    const t = App.cells.thu.items[0].textEl;
-    return parseFloat(getComputedStyle(t).fontSize) < 20;
-  }), true);
-
-  /* 테두리를 눌러도 닫히면 안 된다 — 입력창이 판 안에 들어 있다 */
-  {
-    const edge = await page.evaluate(() => {
-      const r = document.getElementById('scribble').getBoundingClientRect();
-      return { x: r.left + 4, y: r.top + 4 };
-    });
-    await page.mouse.click(edge.x, edge.y);
-    await page.waitForTimeout(250);
-    check('판 테두리를 눌러도 안 닫힌다', await padOpen(), true);
-  }
-
+  check('엔터 뒤에도 깨어 있다 — 이어서 쓴다', await awake('thu'), true);
+  check('적은 것은 보통 크기로 남는다', await page.evaluate(() =>
+    parseFloat(getComputedStyle(App.cells.thu.items[0].textEl).fontSize) < 20), true);
   await page.keyboard.type('두 번째');
   await page.keyboard.press('Enter');
   await page.waitForTimeout(250);
   check('이어서 쓴 것도 들어간다', await texts('thu'), ['매트하이브', '두 번째']);
-
-  await page.keyboard.press('Enter');       // 빈 채로 엔터 = 끝
-  await page.waitForTimeout(250);
-  check('빈 채로 엔터를 치면 닫힌다', await padOpen(), false);
-
-  /* 판 밖을 눌러도 적은 것은 잃지 않는다 (spec §4-1) */
-  at = await emptySpot('fri');
-  await penTap(at.x, at.y);
-  await page.keyboard.type('밖을 눌러 확정');
-  await page.locator('#weekTitle').click();
-  await page.waitForTimeout(350);
-  check('판 밖을 누르면 적은 것이 남고 닫힌다',
-    [await texts('fri'), await padOpen()], [['밖을 눌러 확정'], false]);
-
-  /* 열 때마다 손잡이가 쌓이면 한 번 적은 것이 여러 번 확정된다 */
-  at = await emptySpot('sat');
-  await penTap(at.x, at.y);
-  await page.keyboard.press('Enter');       // 그냥 닫는다
-  await page.waitForTimeout(250);
-  await penTap(at.x, at.y);
-  await page.keyboard.press('Enter');
-  await page.waitForTimeout(250);
-  at = await emptySpot('sat');
-  await penTap(at.x, at.y);
-  await page.keyboard.type('한 번만');
   await page.keyboard.press('Enter');
   await page.waitForTimeout(300);
-  check('여러 번 열어도 한 번만 확정된다', await texts('sat'), ['한 번만']);
+  check('빈 채로 엔터를 치면 잠든다', await awake('thu'), false);
+  check('잠들면 자판도 다시 안 부른다', await page.evaluate(() =>
+    App.cells.thu.layer.inputMode), 'none');
+
+  /* 펜으로 톡 눌러도 같은 자리로 들어온다 */
+  let at = await emptySpot('fri');
+  await penTap(at.x, at.y);
+  check('펜으로 눌러도 깨어난다', await awake('fri'), true);
+  await page.keyboard.type('펜으로 톡');
+  await page.locator('#weekTitle').click();
+  await page.waitForTimeout(350);
+  check('딴 데를 누르면 적은 것이 남고 잠든다',
+    [await texts('fri'), await awake('fri')], [['펜으로 톡'], false]);
+
+  /* 손가락은 예전 그대로 — 판이 깔려 있어도 작은 줄이 열려야 한다 */
+  at = await emptySpot('sun');
+  await page.mouse.click(at.x, at.y);
+  await page.waitForTimeout(350);
+  check('손가락으로 누르면 판이 안 깨어난다', await awake('sun'), false);
+  check('손가락은 예전처럼 작은 줄이 열린다', await page.locator('.entry').count(), 1);
+  await page.keyboard.type('손가락으로 적음');
   await page.keyboard.press('Enter');
-  await page.waitForTimeout(250);
+  await page.locator('#weekTitle').click();
+  await page.waitForTimeout(300);
+  check('손가락으로 적은 것도 들어간다', await texts('sun'), ['손가락으로 적음']);
 
   /* note 칸도 같다 */
-  at = await emptySpot('free');
-  await penTap(at.x, at.y);
-  check('note 칸도 펜으로 크게 쓴다', await padOpen(), true);
+  await page.evaluate(() => App.cells.free.layer.focus());
+  await page.waitForTimeout(250);
+  check('note 칸에도 판이 깔려 있다', await awake('free'), true);
   await page.keyboard.type('노트에 크게');
   await page.keyboard.press('Enter');
   await page.keyboard.press('Enter');
   await page.waitForTimeout(300);
   check('note에 들어간다', await texts('free'), ['노트에 크게']);
 
-  /* 손가락은 예전 그대로 — 작은 줄 하나 */
-  at = await emptySpot('sun');
-  await page.mouse.click(at.x, at.y);
-  await page.waitForTimeout(300);
-  check('손가락으로 누르면 예전처럼 작은 줄이 열린다',
-    [await page.locator('.entry').count(), await padOpen()], [1, false]);
-  await page.keyboard.press('Escape');
-  await page.locator('#weekTitle').click();
-  await page.waitForTimeout(250);
+  /* 판은 항목이 아니다 — 세는 곳에 끼어들면 안 된다 */
+  check('판은 항목으로 세어지지 않는다', await page.evaluate(() =>
+    [document.querySelectorAll('.pad-layer.entry').length,
+     document.querySelectorAll('.pad-layer.item').length,
+     App.cells.thu.listEl.contains(App.cells.thu.layer)]), [0, 0, false]);
 
   await cdp.detach();
-  await page.evaluate(() => {
-    DAY_KEYS.forEach(k => { App.week.days[k] = []; });
-    App.week.graves = {}; App.save(); App.render();
-  });
-  await page.waitForTimeout(250);
+  await clear();
 }
 
 console.log('\n── 캘린더 연결 ──');

@@ -26,6 +26,7 @@
     --item-font: 9.5pt;
     --free-font: 9.5pt;
     --sublabel-font: 6.5pt;    /* 요일 아래 작은 메모 */
+    --pad-font: 26px;          /* 펜으로 크게 쓸 때의 글자 (spec §4-7) */
 
     /* 칸을 나눌수록 그 칸의 글씨와 행이 작아진다 — 좁아진 칸에 작게 쓰듯 */
     --split-scale-1: 0.84;     /* 한 번 나눴을 때 */
@@ -416,26 +417,38 @@
   /* 입력창 안에서는 커서를 찍을 수 있어야 한다 */
   input { touch-action: auto; }
 
-  /* ── 필기판 — 펜으로 크게 쓰는 자리 (spec §4-7) ────────────
-     아이패드의 손글씨 변환(스크리블)은 **포커스된 입력창 위에서만** 돈다.
-     9.5pt짜리 줄 위에서는 팔이 안 펴진다. 그래서 펜으로 빈 곳을 누르면
-     그 칸 자리에 **큰 입력창을 얹는다.** 칸 안에 끼워 넣지 않고 얹는 이유:
-     `.cell-body`는 `overflow: hidden`이라 끼우면 적힌 것들이 밀려난다. */
-  .scribble {
-    position: fixed; z-index: 40;
-    display: flex; align-items: center;
-    padding: 0 14px;
-    background: var(--paper);
-    border: 1px solid var(--rule);
-    border-radius: 8px;
-    box-shadow: 0 3px 18px rgba(0, 0, 0, 0.07);
-  }
-  .scribble-in {
-    width: 100%;
-    border: none; background: none; outline: none; font: inherit;
-    font-size: 26px; line-height: 1.3; color: var(--ink);
+  /* ── 필기판 — 펜이 바로 내려앉는 자리 (spec §4-7) ──────────
+     아이패드의 손글씨 변환(스크리블)은 **텍스트 입력창 위에서만** 돈다.
+     탭해서 입력창을 만든 다음에 쓰라고 하면 손이 한 번 더 간다 —
+     그래서 칸마다 **입력창을 미리 깔아 둔다.** 펜을 대는 순간 이미 거기 있다.
+
+     평소에는 보이지 않는다. 글자도 커서도 투명하고 테두리도 없다.
+     항목보다 **아래**에 깔리므로(z-index) 글자 위는 여전히 긋기의 자리다 —
+     펜이 닿는 곳이 빈 곳이면 쓰기, 글자면 긋기로 저절로 갈린다. */
+  .pad-layer {
+    position: absolute; z-index: 0;
+    margin: 0; padding: 0 2px;
+    border: 1px solid transparent; border-radius: 6px;
+    background: none; outline: none; font: inherit;
+    font-size: 1px; line-height: 1;
+    color: transparent; caret-color: transparent;
     -webkit-user-select: text; user-select: text;
   }
+  /* 깨어나면 비로소 보인다 — 여기서부터가 "크게 쓰는 자리"다 */
+  .pad-layer.on {
+    z-index: 30;
+    padding: 0 10px;
+    background: var(--paper);
+    border-color: var(--rule);
+    box-shadow: 0 3px 18px rgba(0, 0, 0, 0.07);
+    font-size: var(--pad-font); line-height: 1.3;
+    color: var(--ink); caret-color: var(--ink);
+  }
+  /* 적힌 것들은 판 위에 뜬다 — 판이 깔려 있어도 글자 위는 항목의 자리다.
+     **상자 자체는 손짓을 받지 않는다.** `.cell-body`는 칸 전체를 덮는 상자라,
+     받게 두면 빈 곳까지 가로채 판에 펜이 닿지 않는다. 받는 것은 자식들뿐이다. */
+  .cell-body { position: relative; z-index: 1; pointer-events: none; }
+  .cell-body > * { pointer-events: auto; }
 </style>
 </head>
 <body>
@@ -470,9 +483,6 @@
 </main>
 <input id="importFile" type="file" accept="application/json,.json" hidden>
 
-<!-- 펜으로 크게 쓰는 자리. `main` 밖에 둔다 — 안에 두면 키보드가 올라올 때
-     `main`의 transform을 따라 움직여 화면 좌표가 어긋난다 (spec §4-7). -->
-<div class="scribble" id="scribble" hidden></div>
 
 <div class="account" id="account" hidden>
   <div class="account-card">
@@ -888,8 +898,8 @@ const AUTO_SPLIT = {
 
 /* 펜으로 크게 쓰는 자리 (spec §4-7). 손글씨 변환은 입력창이 커야 팔이 펴진다 */
 const PAD = {
-  minHeight: 96,   // 짧은 칸에서도 이만큼은 준다 (px)
-  maxHeight: 260,  // 너무 크면 주간표를 통째로 덮는다
+  fontPx: 26,      // 깨어났을 때의 글자 크기. 이만큼은 돼야 팔이 펴진다
+  guardMs: 400,    // 손가락이 누른 직후의 포커스는 손가락 것으로 본다
 };
 
 /* 열 수를 칸에 반영한다. 나눌수록 그 칸의 글씨가 작아진다. */
@@ -2634,11 +2644,11 @@ const App = {
       /* 칸의 빈 곳을 눌러도 그 칸에 적힌다. 라벨만 누르게 하면 과녁이 너무 작다.
          항목·라벨·입력창 위는 각자의 제스처가 있으므로 건드리지 않고,
          움직였으면(긋기·훑어 지우기) 열지 않는다. */
-      let spot = null, openOnClick = false, withPen = false;
+      let spot = null, openOnClick = false;
       const plain = e => !e.target.closest('.item, .cell-gutter, .entry, .sublabel-entry');
       section.addEventListener('pointerdown', e => {
         /* **무엇으로 눌렀는지는 여기서만 알 수 있다** — click에는 없다 (spec §4-7) */
-        spot = plain(e) ? { x: e.clientX, y: e.clientY, pen: e.pointerType === 'pen' } : null;
+        spot = plain(e) ? { x: e.clientX, y: e.clientY } : null;
         openOnClick = false;
       });
       section.addEventListener('pointerup', e => {
@@ -2646,7 +2656,6 @@ const App = {
         spot = null;
         openOnClick = !!from && plain(e) &&
           Math.hypot(e.clientX - from.x, e.clientY - from.y) < 10;
-        withPen = openOnClick && from.pen;
       });
       section.addEventListener('pointercancel', () => { spot = null; openOnClick = false; });
 
@@ -2678,9 +2687,11 @@ const App = {
       section.addEventListener('click', () => {
         if (!openOnClick) return;
         openOnClick = false;
-        /* 펜으로 눌렀으면 **크게 쓰는 자리**를 연다. 손가락은 예전 그대로 —
-           작은 줄 하나가 열린다. 손글씨 변환은 팔이 펴져야 쓸 만하다 (spec §4-7) */
-        if (withPen) { withPen = false; this.openPad(key); return; }
+        /* **펜이 이미 판을 깨웠으면 물러난다.** 여기서 작은 줄을 열면 그 줄이
+           포커스를 가져가고, 포커스를 잃은 판은 곧바로 잠든다 — 펜으로 톡
+           누른 사람 눈에는 아무 일도 안 일어난 것처럼 보인다 (spec §4-7). */
+        const c = this.cells[key];
+        if (c && c.layer && c.layer.classList.contains('on')) return;
         this.openEntry(key, listEl);
       });
     }
@@ -2691,7 +2702,11 @@ const App = {
       return item;
     });
 
-    this.cells[key] = { section, listEl, items, sub, gutter, mark: null };
+    /* 펜이 바로 내려앉을 자리를 미리 깔아 둔다 (spec §4-7).
+       항목보다 아래에 깔리므로 글자 위는 여전히 긋기의 자리다. */
+    const layer = this.padLayer(key, listEl, section);
+
+    this.cells[key] = { section, listEl, items, sub, gutter, layer, mark: null };
     return section;
   },
 
@@ -2773,6 +2788,7 @@ const App = {
     cell.listEl.scrollTop = 0;
     this.fitColumns(key);
     this.redraw(cell);
+    this.placePad(key);
     this.updateOverflow(key);
   },
 
@@ -2805,6 +2821,7 @@ const App = {
     /* 두 단 이상으로 나뉜 것만 알린다. 한 단은 보통이라 셀 가치가 없다 */
     if (cols > 1) this.note1('split:' + key, () => Log.ev('split', '', cols, cell.items.length));
     if (cell.listEl.style.columnCount !== before) this.redraw(cell);
+    this.placePad(key);
     this.updateOverflow(key);
   },
 
@@ -3299,71 +3316,62 @@ const App = {
     this.focusInCell(input, listEl);
   },
 
-  /* ── 필기판 — 펜으로 크게 쓴다 (spec §4-7) ────────────────
-     아이패드의 손글씨 변환은 포커스된 입력창 위에서만 돈다. 9.5pt 줄 위에서는
-     팔이 안 펴진다 — 펜으로 빈 곳을 누르면 **표 너비만큼 큰 입력창**을 그 칸
-     자리에 얹는다. 다 쓰면 평범한 항목 하나가 된다: **쓰는 자리는 크고,
-     남는 것은 작다.** 엔터로 계속 이어 쓸 수 있는 것은 보통 입력과 같다. */
-  padBox(key) {
-    const cell = this.cells[key];
-    const table = document.getElementById('weekBody').getBoundingClientRect();
-    const box = cell.section.getBoundingClientRect();
-    /* **날짜는 덮지 않는다.** 왼쪽 여백을 비켜 시작해서 표 오른쪽 끝까지 —
-       어느 요일에 적는 중인지 보이면서도 팔은 끝까지 펴진다 (spec §4-7). */
-    const left = cell.listEl.getBoundingClientRect().left;
-    /* 짧은 칸에서도 쓸 자리가 나오게 최소 높이를 준다 */
-    const h = Math.min(Math.max(box.height, PAD.minHeight), PAD.maxHeight);
-    let top = box.top;
-    /* 손가락으로 눌러 자판이 올라왔으면 그 위로 올린다 */
-    const vv = window.visualViewport;
-    const floor = vv ? vv.height + vv.offsetTop : window.innerHeight;
-    if (top + h > floor - 8) top = Math.max(8, floor - 8 - h);
-    return { left, width: Math.max(120, table.right - left), top, height: h };
+  /* ── 필기판 — 펜이 바로 내려앉는 자리 (spec §4-7) ──────────
+     칸마다 투명한 입력창이 **미리 깔려 있다.** 아이패드 손글씨 변환은
+     입력창 위에서만 도는데, 탭해서 만든 다음에 쓰라고 하면 손이 한 번 더 간다.
+     펜을 대는 순간 이미 거기 있으니 **그냥 쓰면 된다.**
+
+     깨어나는 길은 하나다: 그 입력창이 포커스를 받는 것. 펜으로 톡 누르든,
+     스크리블이 글씨를 알아보고 스스로 포커스를 주든 같은 자리로 들어온다.
+     **손가락이 준 포커스만 걸러 낸다** — 손가락은 예전처럼 작은 줄이 열려야 한다. */
+  padLayer(key, listEl, section) {
+    const layer = document.createElement('input');
+    layer.className = 'pad-layer';
+    layer.type = 'text';
+    layer.setAttribute('autocomplete', 'off');
+    layer.setAttribute('autocapitalize', 'sentences');
+    layer.setAttribute('enterkeyhint', 'enter');
+    layer.setAttribute('aria-label', '펜으로 적기');
+    /* **자판을 부르지 않는다.** 손가락이 잘못 눌러 포커스가 가더라도 자판이
+       올라오지 않아야 화면이 덜컹거리지 않는다. 깨어날 때 되돌린다. */
+    layer.inputMode = 'none';
+
+    /* 손가락·마우스가 이 판을 누른 시각. 스크리블은 포인터 없이 포커스를 준다 */
+    layer.addEventListener('pointerdown', e => {
+      if (e.pointerType !== 'pen') this.padTouchAt = e.timeStamp;
+    });
+    layer.addEventListener('focus', e => {
+      if (performance.now() - (this.padTouchAt || -1e9) < PAD.guardMs) {
+        layer.blur();          // 손가락이다 — 칸의 보통 손짓에 맡긴다
+        return;
+      }
+      this.wakePad(key, layer);
+    });
+    section.appendChild(layer);
+    return layer;
   },
 
-  openPad(key) {
+  /* 깔린 판을 깨운다 — 여기서부터 크게 보이고, 크게 적힌다 */
+  wakePad(key, layer) {
+    if (layer.classList.contains('on')) return;
+    layer.classList.add('on');
+    layer.inputMode = 'text';
+
     const cell = this.cells[key];
-    if (!cell) return;
-    const pad = document.getElementById('scribble');
-    if (!pad.hidden) return;
-
-    /* 입력창은 열 때마다 새로 만든다. 하나를 두고 다시 쓰면 열 때마다
-       손잡이가 겹겹이 쌓여, 두 번째부터 한 번 적은 것이 여러 번 확정된다. */
-    const input = document.createElement('input');
-    input.className = 'scribble-in';
-    input.type = 'text';
-    input.setAttribute('autocomplete', 'off');
-    input.setAttribute('autocapitalize', 'sentences');
-    input.setAttribute('enterkeyhint', 'enter');
-
-    const place = () => {
-      const b = this.padBox(key);
-      pad.style.left = b.left + 'px';
-      pad.style.width = b.width + 'px';
-      pad.style.top = b.top + 'px';
-      pad.style.height = b.height + 'px';
-    };
-    place();
-    pad.appendChild(input);
-    pad.hidden = false;
-
     let closed = false;
-    const vv = window.visualViewport;
-    if (vv) { vv.addEventListener('resize', place); vv.addEventListener('scroll', place); }
-
-    const close = () => {
+    const sleep = () => {
       if (closed) return;
       closed = true;
-      if (vv) { vv.removeEventListener('resize', place); vv.removeEventListener('scroll', place); }
-      pad.hidden = true;
-      input.remove();
+      layer.classList.remove('on');
+      layer.inputMode = 'none';
+      layer.value = '';
       this.refreshCell(key);
       Sync.push();
     };
 
-    /* 확정은 보통 입력과 같은 규칙이다 — 적힌 것이 있으면 항목이 된다 */
+    /* 확정 규칙은 보통 입력과 같다 (spec §4-1) */
     const commitText = () => {
-      const text = input.value.trim();
+      const text = layer.value.trim();
       if (!text) return false;
       const now = Date.now();
       const data = {
@@ -3381,21 +3389,35 @@ const App = {
       cell.items.push(item);
       item.restore();
       this.refreshCell(key);
-      input.value = '';      // 이어서 다음 것을 쓴다
+      this.placePad(key);        // 항목이 늘면 칸이 나뉘고 판 자리도 달라진다
+      layer.value = '';          // 이어서 다음 것을 쓴다
       return true;
     };
 
-    input.addEventListener('keydown', e => {
+    layer.addEventListener('keydown', function onKey(e) {
       if (e.key !== 'Enter') return;
       e.preventDefault();
-      if (!commitText()) { close(); input.blur(); }
+      if (!commitText()) { layer.removeEventListener('keydown', onKey); sleep(); layer.blur(); }
     });
-    /* 적은 것을 잃지 않는 세 곳은 보통 입력과 같다 (spec §4-1).
-       바깥 판정은 입력창이 아니라 **판 전체**로 본다 — 테두리를 눌러도 닫히지 않게 */
-    keepText(input, () => { commitText(); close(); }, pad);
-    typeSound(input);
+    layer.addEventListener('blur', () => { commitText(); sleep(); }, { once: true });
+    /* 딴 데를 누르거나 화면을 떠나도 적은 것은 남는다 (spec §4-1) */
+    keepText(layer, () => { commitText(); sleep(); }, layer);
+    typeSound(layer);
+  },
 
-    input.focus({ preventScroll: true });
+  /* 판은 그 칸의 **적히는 자리**를 그대로 덮는다. 요일 칸은 여백 오른쪽,
+     note 칸은 라벨 아래 — 칸마다 다르므로 실제 상자를 재서 맞춘다. */
+  placePad(key) {
+    const cell = this.cells[key];
+    if (!cell || !cell.layer) return;
+    const s = cell.section.getBoundingClientRect();
+    const b = cell.listEl.getBoundingClientRect();
+    if (b.height < 1) return;
+    const st = cell.layer.style;
+    st.left = (b.left - s.left) + 'px';
+    st.top = (b.top - s.top) + 'px';
+    st.width = b.width + 'px';
+    st.height = b.height + 'px';
   },
 
   /* `.cell-body`는 `overflow: hidden`이지만 **굴러가기는 한다.**
