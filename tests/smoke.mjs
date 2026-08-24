@@ -2057,14 +2057,19 @@ console.log('\n── 캘린더 연결 ──');
   const dayTexts = key => page.evaluate(k => App.week.days[k].map(i => i.text), key);
   const settle = () => page.evaluate(() => Cal.run());
 
-  /* 설정이 없으면 이 기능은 없는 것이다 (spec §13과 같은 규칙) */
+  /* 설정이 없으면 이 기능은 없는 것이다 (spec §13과 같은 규칙).
+     지금은 값이 박혀 있으므로 잠시 비워서 그 규칙을 잰다 */
+  const realKey = await page.evaluate(() => CAL.apiKey);
+  const realPid = await page.evaluate(() => CAL.projectId);
+  await page.evaluate(() => { CAL.apiKey = ''; CAL.projectId = ''; });
   await page.locator('#acctBtn').click();
   await page.waitForTimeout(250);
   check('설정이 없으면 캘린더 줄이 아예 없다', await page.evaluate(() =>
     [document.getElementById('calRow').hidden, document.getElementById('calAuthRow').hidden]),
     [true, true]);
 
-  await page.evaluate(() => { CAL.apiKey = 'test-key'; CAL.projectId = 'test-proj'; App.renderCal(); });
+  await page.evaluate(([k, p]) => { CAL.apiKey = k; CAL.projectId = p; App.renderCal(); },
+                     [realKey || 'test-key', realPid || 'test-proj']);
   await page.waitForTimeout(150);
   check('설정이 있으면 캘린더 줄이 나타난다', await page.evaluate(() =>
     document.getElementById('calRow').hidden), false);
