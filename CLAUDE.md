@@ -35,6 +35,7 @@
 |---|---|
 | `index.html` | 전부. CSS·JS 인라인, 외부 의존 0, 빌드 없음 |
 | `clearweek-spec.md` | 기획서. 결정과 이유가 여기 쌓인다 |
+| `HANDOFF-NATIVE.md` | **네이티브(RN/Expo)로 넘기는 인수인계.** 웹 구현은 빼고 규칙·함정·튜닝 값만 |
 | `tests/smoke.mjs` | 회귀 테스트 (`node tests/smoke.mjs`) |
 | `manifest.webmanifest`, `icon-180.png`, `icon-512.png` | PWA |
 | `functions/_lib.js` | 서버 공통 — **합치기 규칙이 여기에만 있다** |
@@ -346,9 +347,16 @@ Analytics Engine 바인딩은 지웠다. 로그가 꺼져 있으므로 필요 �
   저자 스타일 `display: flex`가 브라우저 기본 `[hidden]`을 이기고 있었다.
 - ~~칸을 나누려면 매번 세로선을 그어야 한다~~ → 항목 수를 보고 저절로 나뉜다 (spec §3).
 
-### 다음 갈림길 (spec §10)
+### 다음 갈림길 — 정해졌다 (2026-08-24)
 
-아이패드 Swift Playgrounds에서 **위젯 익스텐션 생성이 가능한지** 확인.
-가능하면 네이티브 진행(Mac 불필요), 불가능하면 클라우드 Mac 또는 중고 Mac mini.
-위젯이 실질적인 제품이다 — "한 주가 항상 펼쳐져 있음"이 이 제품의 경쟁력이고,
-손맛은 계속 쓰게 만드는 장치다.
+**React Native / Expo + EAS 클라우드 빌드로 간다.** Mac 없이 실기기에 설치된다.
+
+§10이 물었던 "Swift Playgrounds에서 위젯이 되는가"는 **안 된다**로 판명됐지만
+(익스텐션 미지원), Expo에서는 `@bacons/apple-targets` 설정 플러그인 + EAS로
+**WidgetKit 위젯이 된다.** 위젯은 Swift이고 앱과는 App Group으로만 통신하므로,
+**데이터 저장을 처음부터 App Group 컨테이너에 두는 것**이 좋다.
+
+넘어가는 데 필요한 것은 전부 **`HANDOFF-NATIVE.md`** 에 있다 — 규칙, 제스처,
+웹에서 밟은 함정 여덟 가지, 손과 귀로 맞춘 튜닝 값, 만드는 순서.
+
+**웹 버전은 지우지 않는다.** 손맛 비교의 기준선이다.
