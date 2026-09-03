@@ -1,0 +1,33 @@
+{
+  "expo": {
+    "name": "Clear Week",
+    "slug": "clear-week",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "backgroundColor": "#ffffff",
+    "scheme": "clearweek",
+    "newArchEnabled": true,
+    "assetBundlePatterns": ["assets/*"],
+    "ios": {
+      "bundleIdentifier": "dev.clearweek.app",
+      "supportsTablet": true,
+      "requireFullScreen": false,
+      "entitlements": {
+        "com.apple.security.application-groups": ["group.dev.clearweek"]
+      },
+      "infoPlist": {
+        "UIStatusBarStyle": "UIStatusBarStyleDefault",
+        "UIViewControllerBasedStatusBarAppearance": false
+      }
+    },
+    "android": {
+      "package": "dev.clearweek.app"
+    },
+    "plugins": [
+      ["@bacons/apple-targets", { "appleTeamId": "REPLACE_WITH_TEAM_ID" }],
+      "expo-secure-store",
+      "expo-audio"
+    ]
+  }
+}
