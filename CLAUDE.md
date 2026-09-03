@@ -47,6 +47,7 @@
 | `SETUP.md` | 서버를 켜려면 대시보드에서 해야 하는 일 |
 | `wrangler.example.toml` | 로컬 개발용 견본. **`wrangler.toml`로 커밋하면 대시보드가 잠긴다** |
 | `native/` | **네이티브(RN/Expo) 구현.** 안내서는 `native/README.md` (spec §17) |
+| `native/BUILD-STEPS.md` | 실기기까지 가는 단계. 계정 화면에서 눌러야 하는 것이 여기 |
 
 `index.html` 안의 구조 — 위에서부터 CSS 변수 → `STROKE`/`ERASE`/`SOUND`/`SPLIT`
 상수 → 유틸 → 저장·백업 → 소리 → `StrikeItem`(항목 하나) → `App`(화면).
