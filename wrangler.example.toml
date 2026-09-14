@@ -19,3 +19,12 @@ compatibility_date = "2026-08-01"
 [[kv_namespaces]]
 binding = "CLEARWEEK"
 id = "<대시보드 Storage & Databases → KV 에서 만든 네임스페이스 ID>"
+
+# 같은 주에 동시에 써도 안 사라지게 하는 방 (SETUP.md 7번).
+# **없어도 앱은 돈다** — 그때는 KV만 쓰고, 동시 쓰기에 약한 채로 돈다
+# (`/api/me`가 `atomic: false`로 알린다).
+# 방 자체는 `worker/week-store/`가 따로 배포한다 — Pages는 붙기만 한다.
+[[durable_objects.bindings]]
+name = "WEEK_STORE"
+class_name = "WeekStore"
+script_name = "clear-week-store"

@@ -126,6 +126,66 @@ console.log('\n── 합치기는 순서를 타지 않아야 한다 ──');
     JSON.stringify(mergeWeek(a, b, T + 99)) === JSON.stringify(mergeWeek(b, a, T + 99)), true);
 }
 
+/*
+ * 같은 시각에 부딪히는 경우 (2026-09-14)
+ *
+ * 두 기기의 시계는 다르게 간다. 밀리초까지 같은 값이 찍히는 일은 드물지만,
+ * 한 번 일어나면 **어느 쪽을 먼저 넣느냐로 답이 갈렸다** — 서버는 (내 것, 저장된 것)
+ * 순으로 넣고 기기는 반대로 볼 수 있으니, 같은 두 주가 기기마다 다르게 보였다.
+ * 시각이 같으면 그다음 기준으로 내려가 **언제나 같은 답**이 나와야 한다.
+ */
+const both = (x, y, now = T + 99) =>
+  JSON.stringify(mergeWeek(x, y, now)) === JSON.stringify(mergeWeek(y, x, now));
+
+console.log('\n── 같은 시각에 부딪혀도 순서를 타지 않는다 ──');
+{
+  const a = week([item('a', '장보기', T, { updatedAt: T + 5 })]);
+  const b = week([item('a', '은행', T, { updatedAt: T + 5 })]);
+  check('같은 시각에 서로 다른 글자', both(a, b), true);
+  check('어느 쪽으로 넣어도 하나만 남는다',
+    mergeWeek(a, b, T + 99).days.mon.length, 1);
+}
+{
+  const a = week([item('a', '장보기', T, { updatedAt: T + 5 })]);
+  const b = week([item('a', '장보기', T, { updatedAt: T + 5, struck: true, strikes: [S(0, 1)] })]);
+  check('같은 시각에 한쪽만 그어짐', both(a, b), true);
+  /* **취소선은 축적이다** — 같은 시각이면 그은 쪽을 남긴다 */
+  check('같은 시각이면 그은 쪽이 남는다',
+    mergeWeek(a, b, T + 99).days.mon[0].struck, true);
+  check('반대로 넣어도 그렇다',
+    mergeWeek(b, a, T + 99).days.mon[0].struck, true);
+}
+{
+  const a = week([item('a', '장보기', T, { updatedAt: T + 5, struck: true, strikes: [S(0, 0.5)] })]);
+  const b = week([item('a', '장보기', T, { updatedAt: T + 5, struck: true, strikes: [S(0, 0.5), S(1, 1)] })]);
+  check('같은 시각에 획 개수가 다름', both(a, b), true);
+  check('많이 그은 쪽이 남는다',
+    mergeWeek(a, b, T + 99).days.mon[0].strikes.length, 2);
+}
+{
+  const a = noteWeek('8/20 마감', T + 5, []);
+  const b = noteWeek('8/21 마감', T + 5, [S(0, 1)]);
+  check('메모도 같은 시각이면 순서를 안 탄다', both(a, b), true);
+  check('메모의 글자와 획은 여전히 한 쪽에서 온다', (w =>
+    (w.notes.mon === '8/21 마감') === (w.noteStrikes.mon.length === 1))(mergeWeek(a, b, T + 99)), true);
+}
+
+console.log('\n── 여러 번·여러 순서로 합쳐도 같은 곳에 닿는다 ──');
+{
+  const a = week([item('a', '장보기', T, { updatedAt: T + 5 })], { graves: { z: T + 1 } });
+  const b = week([item('a', '은행', T, { updatedAt: T + 5 }), item('b', '운동', T + 2)]);
+  const c = week([item('b', '운동 · 30분', T + 2, { updatedAt: T + 9 }), item('c', '치과', T + 3)]);
+  const N = T + 99;
+  check('결합법칙 — (a+b)+c 와 a+(b+c)가 같다',
+    JSON.stringify(mergeWeek(mergeWeek(a, b, N), c, N)) ===
+    JSON.stringify(mergeWeek(a, mergeWeek(b, c, N), N)), true);
+  check('멱등 — 한 번 더 합쳐도 그대로다',
+    JSON.stringify(mergeWeek(mergeWeek(a, b, N), b, N)) ===
+    JSON.stringify(mergeWeek(a, b, N)), true);
+  check('자기 자신과 합쳐도 그대로다',
+    texts(mergeWeek(b, b, N)), texts(b));
+}
+
 console.log('\n── 바깥에서 들어온 값 ──');
 check('모양이 아닌 값은 빈 주가 된다', texts(sanitizeWeek(null, '2026-W34')), []);
 check('id 없는 항목은 버린다',

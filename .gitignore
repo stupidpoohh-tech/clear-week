@@ -3,3 +3,5 @@
 .wrangler/
 node_modules/
 wrangler.toml
+# 방 워커의 설정도 견본만 커밋한다 (SETUP.md 7번)
+worker/*/wrangler.toml

@@ -156,11 +156,57 @@ export function sanitizeWeek(raw, weekId) {
 }
 
 /*
+ * 같은 시각에 부딪혔을 때 누가 남나 (2026-09-14).
+ *
+ * 예전에는 `updatedAt`이 같으면 **먼저 넣은 쪽**이 남았다. 서버는 (올라온 것,
+ * 저장된 것) 순으로 넣고 기기는 반대로 볼 수 있으니, 같은 두 주가 자리마다
+ * 다르게 보였다 — 합치기가 인수 순서를 탄 것이다. 두 기기의 시계가 밀리초까지
+ * 같은 값을 찍는 일은 드물지만, 한 번 어긋나면 무엇이 맞는지 알 길이 없다.
+ *
+ * 그래서 시각이 같으면 **다음 기준으로 내려간다.** 새 자리를 만들지 않고
+ * 이미 있는 값만 본다 (예전 백업 파일도 그대로 읽힌다).
+ *
+ *   1. 나중에 고친 쪽                     — 원래 규칙
+ *   2. **더 그은 쪽**                     — 취소선은 축적이다 (규칙 1)
+ *   3. 그어진 쪽                          — 같은 뜻의 마지막 갈래
+ *   4. 글자·시각·획을 늘어놓아 사전순      — 뜻은 없지만 **언제나 같은 답**
+ *
+ * 넷을 차례로 보므로 두 주를 어느 순서로 넣어도, 몇 번을 겹쳐 합쳐도 같은
+ * 곳에 닿는다(교환·결합·멱등). 4번까지 같으면 두 항목은 실제로 같은 것이다.
+ */
+const strikePrint = list => (Array.isArray(list) ? list : [])
+  .map(s => [Number(s && s.line) || 0, Number(s && s.a) || 0,
+             Number(s && s.b) || 0, Number(s && s.seed) || 0].join(':')).join('|');
+
+const itemPrint = it => [
+  String(it.text || ''), it.struck ? 1 : 0, ts(it.createdAt),
+  strikePrint(it.strikes),
+].join('\u0000');
+
+/* x가 남을 자리인가 */
+function itemWins(x, y) {
+  const tx = ts(x.updatedAt), ty = ts(y.updatedAt);
+  if (tx !== ty) return tx > ty;
+  const sx = (x.strikes || []).length, sy = (y.strikes || []).length;
+  if (sx !== sy) return sx > sy;
+  if (!!x.struck !== !!y.struck) return !!x.struck;
+  return itemPrint(x) > itemPrint(y);
+}
+
+/* 메모는 글자와 획이 한 몸이라 통째로 한 쪽을 고른다. 시각이 같으면 항목과
+   같은 방식으로 사전순까지 내려간다 (spec §4-6) */
+const notePrint = (w, k) => [
+  (w.notes && typeof w.notes[k] === 'string' ? w.notes[k] : ''),
+  strikePrint(w.noteStrikes && w.noteStrikes[k]),
+].join('\u0000');
+
+/*
  * 두 주를 항목 단위로 합친다.
  *
  * 규칙은 하나다 — **적은 것이 없어지지 않는 쪽으로 기운다.**
  * 같은 항목은 나중에 고친 쪽을 따르고, 지운 표시(graves)보다 나중에 고쳤으면
  * 고친 쪽이 이긴다. 순서는 createdAt으로 정한다. 배열 순서를 쓰면 기기마다 달라진다.
+ * 시각까지 같으면 위의 `itemWins`가 결판을 낸다 — **인수 순서는 답을 바꾸지 않는다.**
  */
 export function mergeWeek(a, b, now = Date.now()) {
   const weekId = a.weekId || b.weekId;
@@ -177,7 +223,7 @@ export function mergeWeek(a, b, now = Date.now()) {
     for (const src of [a, b]) {
       for (const it of (src.days && src.days[k]) || []) {
         const prev = byId.get(it.id);
-        if (!prev || ts(it.updatedAt) > ts(prev.updatedAt)) byId.set(it.id, it);
+        if (!prev || itemWins(it, prev)) byId.set(it.id, it);
       }
     }
     out.days[k] = Array.from(byId.values())
@@ -187,7 +233,9 @@ export function mergeWeek(a, b, now = Date.now()) {
     /* 메모는 글자와 획이 한 몸이다 — 나중에 고친 쪽을 통째로 따른다.
        따로 합치면 이쪽 글자에 저쪽 획이 얹혀 엉뚱한 줄이 그어진다 (spec §4-6). */
     const an = ts(a.noteAt && a.noteAt[k]), bn = ts(b.noteAt && b.noteAt[k]);
-    const win = bn > an ? b : a;
+    const win = an === bn
+      ? (notePrint(b, k) > notePrint(a, k) ? b : a)
+      : (bn > an ? b : a);
     out.notes[k] = (win.notes && win.notes[k]) || '';
     out.noteStrikes[k] = strikeList(win.noteStrikes && win.noteStrikes[k], 8);
     out.noteAt[k] = Math.max(an, bn);

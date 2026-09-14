@@ -32,8 +32,15 @@ const TYPES = { '.html': 'text/html', '.png': 'image/png', '.webmanifest': 'appl
 /* Firebase Auth를 흉내 낸다 — 이 앱은 로그인 하나로 두 앱(Clear Week 서버·
    캘린더 Firestore)이 함께 이어진다 (spec §11, 2026-08-24).
    `fbUsers`가 저쪽의 사용자 저장소를 흉내 낸다. */
-const api = { weeks: {}, resetAt: 0, fbUsers: new Map(),
-              log: [], logRaw: [], logOff: false, syncDelay: 0 };
+/* `fbVerified`는 **메일 인증을 끝낸 주소**다. 진짜 서버는 토큰 안의
+   `email_verified`만 보므로, 여기서도 인증된 사람에게만 `tok-` 토큰을 준다.
+   인증 전에는 `tokx-`라 아래 `bearerEmail`이 걸러 낸다 — 진짜와 같은 거절이다. */
+const api = { weeks: {}, resetAt: 0, fbUsers: new Map(), fbVerified: new Set(),
+              mails: [], pushed: [], denied: 0,
+              log: [], logRaw: [], logOff: false,
+              syncDelay: 0, syncAllDelay: 0 };
+const fbToken = mail => (api.fbVerified.has(mail) ? 'tok-' : 'tokx-') + mail;
+const fbMail = token => String(token || '').replace(/^tokx?-/, '');
 const readBody = req => new Promise(r => {
   let b = ''; req.on('data', c => (b += c)); req.on('end', () => { try { r(JSON.parse(b || '{}')); } catch { r({}); } });
 });
@@ -61,7 +68,8 @@ async function handleApi(req, res, url) {
   }
 
   const email = bearerEmail(req);
-  if (!email) return send(res, 401, { error: 'unauthorized' });
+  /* 인증 전 토큰(`tokx-`)은 여기서 걸린다 — 진짜 서버의 `email_verified`와 같은 자리 */
+  if (!email) { api.denied++; return send(res, 401, { error: 'unauthorized' }); }
 
   if (url === '/api/reset') {
     api.weeks = {};
@@ -78,6 +86,7 @@ async function handleApi(req, res, url) {
     const merged = mergeWeek(sanitizeWeek(b.week, id),
       api.weeks[id] ? sanitizeWeek(api.weeks[id], id) : blankWeek(id));
     api.weeks[id] = merged;
+    api.pushed.push(id);
     /* 느리게 대답하게 해서 "오가는 사이"를 넓힌다 */
     if (api.syncDelay) await new Promise(r => setTimeout(r, api.syncDelay));
     return send(res, 200, { week: merged, resetAt: api.resetAt });
@@ -87,8 +96,11 @@ async function handleApi(req, res, url) {
     /* GET은 보기만 한다 — 합치지도 쓰지도 않는다 */
     if (req.method === 'GET') return send(res, 200, { weeks: api.weeks, resetAt: api.resetAt });
     const b = await readBody(req);
+    /* 느리게 대답하게 해서 "오가는 사이"를 넓힌다 — 그 사이에 손이 움직인다 */
+    if (api.syncAllDelay) await new Promise(r => setTimeout(r, api.syncAllDelay));
     const stale = api.resetAt > 0 && (Number(b.resetAt) || 0) < api.resetAt;
     const incoming = stale ? {} : (b.weeks || {});
+    api.pushed.push('all');
     const ids = new Set([...Object.keys(api.weeks), ...Object.keys(incoming)]);
     const weeks = {};
     for (const id of ids) {
@@ -1178,23 +1190,41 @@ async function setupFirebase(pg) {
       if (pw === undefined) return send(400, { error: { message: 'EMAIL_NOT_FOUND' } });
       if (pw !== body.password) return send(400, { error: { message: 'INVALID_PASSWORD' } });
       return send(200, { localId: 'uid-' + email, email,
-        idToken: 'tok-' + email, refreshToken: 'ref-' + email, expiresIn: '3600' });
+        idToken: fbToken(email), refreshToken: 'ref-' + email, expiresIn: '3600' });
     }
     if (url.includes(':signUp')) {
       if (String(body.password || '').length < 6) return send(400, { error: { message: 'WEAK_PASSWORD' } });
       if (api.fbUsers.has(email)) return send(400, { error: { message: 'EMAIL_EXISTS' } });
       api.fbUsers.set(email, body.password);
+      /* **새 계정은 인증 전이다.** 진짜 Firebase도 그렇다 */
       return send(200, { localId: 'uid-' + email, email,
-        idToken: 'tok-' + email, refreshToken: 'ref-' + email, expiresIn: '3600' });
+        idToken: fbToken(email), refreshToken: 'ref-' + email, expiresIn: '3600' });
+    }
+    /* 인증 메일 — 보낸 것만 세어 둔다 (내용은 볼 것이 없다) */
+    if (url.includes(':sendOobCode')) {
+      const who = fbMail(body.idToken);
+      if (!api.fbUsers.has(who)) return send(400, { error: { message: 'INVALID_ID_TOKEN' } });
+      if (body.requestType !== 'VERIFY_EMAIL') return send(400, { error: { message: 'INVALID_REQ_TYPE' } });
+      api.mails.push(who);
+      return send(200, { email: who });
+    }
+    /* 지금 인증됐는지 되묻는 자리. 사람이 메일 링크를 누르면 여기 답이 바뀐다 */
+    if (url.includes(':lookup')) {
+      const who = fbMail(body.idToken);
+      if (!api.fbUsers.has(who)) return send(400, { error: { message: 'INVALID_ID_TOKEN' } });
+      return send(200, { users: [{ localId: 'uid-' + who, email: who,
+        emailVerified: api.fbVerified.has(who) }] });
     }
     return send(404, {});
   });
   await pg.route('https://securetoken.googleapis.com/**', async route => {
     const body = JSON.parse(route.request().postData() || '{}');
     const email = String(body.refresh_token || '').replace(/^ref-/, '');
+    /* 갈아 끼운 토큰에는 **그 시점의** 인증 상태가 담긴다. 인증한 뒤 새로
+       받아야 서버가 받아 주는 것이 이 흐름의 핵심이다 (P0-1) */
     route.fulfill({
       status: 200, contentType: 'application/json',
-      body: JSON.stringify({ id_token: 'tok-' + email, refresh_token: 'ref-' + email }),
+      body: JSON.stringify({ id_token: fbToken(email), refresh_token: 'ref-' + email }),
       headers: okHeaders,
     });
   });
@@ -1211,6 +1241,9 @@ async function setupFirebase(pg) {
   });
 }
 
+/* 새 계정은 인증 전이라 서버로 나가지 못한다 (P0-1). 아래 검사들이 보는 것은
+   동기화 자체이므로, 여기서 **메일함을 대신 열어** 인증까지 마쳐 준다.
+   인증 흐름 자체는 뒤의 "메일 인증" 마당에서 따로 검사한다. */
 async function login(pg, mail, pw = 'goodpw6') {
   await openDrawer(pg);
   await pg.locator('#loginBtn').click();
@@ -1218,6 +1251,12 @@ async function login(pg, mail, pw = 'goodpw6') {
   await pg.locator('#loginPw').fill(pw);
   await pg.locator('#authGo').click();
   await pg.waitForFunction(() => Sync.email !== null, null, { timeout: 5000 });
+  await pg.waitForTimeout(300);
+  if (!(await pg.evaluate(() => Sync.verified))) {
+    api.fbVerified.add(mail);                      // 사람이 메일 링크를 눌렀다
+    await pg.locator('#verifyGo').click();
+    await pg.waitForFunction(() => Sync.verified, null, { timeout: 5000 });
+  }
   await pg.waitForTimeout(400);
 }
 
@@ -2306,6 +2345,200 @@ console.log('\n── 캘린더에서 받아 오기 (한 방향) ──');
   await page.evaluate(() => Sync.logout());
   await page.locator('#acctClose').click();
   await page.waitForTimeout(300);
+}
+
+/*
+ * ── 메일 인증 (P0-1, 2026-09-14) ────────────────────────────
+ *
+ * 서버는 Firebase가 메일 주인을 확인한 계정만 받는다(`email_verified`).
+ * 그런데 앱에서 만든 새 계정에는 인증 메일이 나가지 않았다 — 그 사람은 영영
+ * 이어지지 않는데 화면은 이어진 것처럼 보였다. 여기서 보는 것은 넷이다:
+ * 메일이 나가는가 · 인증 전에 이어진 척하지 않는가 · 그동안 로컬은 되는가 ·
+ * 인증하면 그때부터 이어지는가.
+ */
+console.log('\n── 메일 인증 (P0-1) ──');
+{
+  const MAIL = 'new@example.com';
+  const pg = await fresh(MAIL, '인증 전에 적은 것');
+  await startLogin(pg, MAIL);
+  await pg.waitForTimeout(300);
+
+  check('새 계정을 만들면 인증 메일이 나간다',
+    api.mails.filter(m => m === MAIL).length, 1);
+  check('아직 이어지지 않았다', await pg.evaluate(() => Sync.verified), false);
+  check('인증 줄이 나온다', await pg.locator('#verifyRow').isVisible(), true);
+  /* **이어진 것처럼 보이면 안 된다** — 사람 표시가 진해지는 것이 그 신호다 */
+  check('사람 표시는 진해지지 않는다', await pg.evaluate(() =>
+    document.getElementById('acctBtn').classList.contains('on')), false);
+  check('무슨 상태인지 말해 준다', await pg.evaluate(() =>
+    document.getElementById('authMsg').textContent.includes('인증 메일을 확인')), true);
+  check('전부 비우기는 아직 내놓지 않는다', await pg.locator('#wipeRow').isVisible(), false);
+
+  /* 인증 전에도 **이 기기에는 계속 적힌다.** 그리고 서버는 두드리지도 않는다 */
+  const pushedBefore = api.pushed.length, deniedBefore = api.denied;
+  await pg.evaluate(() => {
+    const now = Date.now();
+    App.week.days.wed.push({ id: 'local-only', text: '인증 전에도 적힌다',
+      struck: false, createdAt: now, updatedAt: now, strikes: [] });
+    App.save();
+  });
+  await pg.waitForTimeout(1400);      // 올릴 때가 지나도록 기다린다
+  check('인증 전에도 이 기기에는 남는다', await pg.evaluate(() =>
+    loadWeek(App.week.weekId).days.wed.some(i => i.text === '인증 전에도 적힌다')), true);
+  check('서버로는 아무것도 나가지 않는다', api.pushed.length, pushedBefore);
+  check('거절당하러 가지도 않는다', api.denied, deniedBefore);
+  check('캘린더도 아직 열리지 않는다', await pg.evaluate(() => Cal.live()), false);
+
+  /* 서버 쪽 검증은 그대로다 — 낮추지 않았다는 것을 여기서 못박는다 */
+  check('서버는 인증 전 토큰을 거절한다', await pg.evaluate(async () => {
+    const r = await fetch('/api/sync', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer tokx-new@example.com' },
+      body: JSON.stringify({ weekId: '2026-W01', week: {} }),
+    });
+    return r.status;
+  }), 401);
+
+  /* 아직 메일을 안 눌렀는데 확인을 누르면 */
+  await pg.locator('#verifyGo').click();
+  await pg.waitForTimeout(400);
+  check('아직이면 아직이라고 한다', await pg.evaluate(() =>
+    document.getElementById('authMsg').textContent.includes('아직 인증 전')), true);
+  check('그래도 로그인은 지킨다', await pg.evaluate(() => !!Sync.email), true);
+
+  /* 다시 보내기는 **중복 요청을 막는다** */
+  await pg.locator('#verifyResend').click();
+  await pg.waitForTimeout(300);
+  check('조금 전에 보냈으면 또 보내지 않는다',
+    api.mails.filter(m => m === MAIL).length, 1);
+  check('언제 다시 보낼 수 있는지 알려 준다', await pg.evaluate(() =>
+    document.getElementById('authMsg').textContent.includes('뒤에 다시 보낼 수 있습니다')), true);
+  await pg.evaluate(() => { Sync.mailAt = 0; });     // 기다린 셈 치고
+  await pg.locator('#verifyResend').click();
+  await pg.waitForTimeout(300);
+  check('기다린 뒤에는 다시 보낸다', api.mails.filter(m => m === MAIL).length, 2);
+
+  /* 사람이 메일의 링크를 눌렀다 */
+  api.fbVerified.add(MAIL);
+  await pg.locator('#verifyGo').click();
+  await pg.waitForFunction(() => Sync.verified, null, { timeout: 5000 });
+  await pg.waitForTimeout(900);
+  check('인증하면 그때부터 이어진다', await pg.evaluate(() => Sync.verified), true);
+  check('인증 줄은 사라진다', await pg.locator('#verifyRow').isVisible(), false);
+  check('사람 표시가 진해진다', await pg.evaluate(() =>
+    document.getElementById('acctBtn').classList.contains('on')), true);
+
+  /* 인증이 끝나면 그제야 기기를 잇는 물음이 온다 — 양쪽에 기록이 있으므로.
+     인증 전에는 이 물음조차 뜨지 않는 것이 맞다 (서버를 안 두드리므로) */
+  check('인증한 뒤에야 첫 연결을 묻는다', await pg.locator('#linkRow').isVisible(), true);
+  await pg.locator('#linkMerge').click();
+  await pg.waitForTimeout(1200);
+  check('인증 전에 적은 것도 함께 올라간다',
+    api.weeks[await pg.evaluate(() => App.week.weekId)].days.wed
+      .some(i => i.text === '인증 전에도 적힌다'), true);
+  check('토큰을 새로 받아 서버가 받아 준다', api.pushed.length > pushedBefore, true);
+  await pg.close();
+}
+
+/* 인증이 끝난 계정은 예전처럼 곧바로 이어진다 — 이 변경이 기존 사용자를
+   막지 않는다는 것 */
+{
+  const pg = await fresh('new@example.com');
+  await startLogin(pg, 'new@example.com');
+  await pg.waitForTimeout(700);
+  check('이미 인증한 계정은 바로 이어진다', await pg.evaluate(() => Sync.verified), true);
+  check('인증 줄도 안 나온다', await pg.locator('#verifyRow').isVisible(), false);
+  await pg.close();
+}
+
+/*
+ * ── 전부 맞추는 동안 손이 움직여도 잃지 않는다 (P0-2, 2026-09-14) ──
+ *
+ * `syncAll`은 응답을 받아 `adoptAll`로 통째로 덮었다. 응답을 기다리는 사이에
+ * 적은 항목·그은 획·메모·지운 것이 그 덮기에 쓸려 나갔다. `push`에는 있던
+ * 방패(rev)가 여기엔 없었다.
+ */
+console.log('\n── 전부 맞추는 동안 적은 것 (P0-2) ──');
+{
+  const pg = await fresh('race@example.com', '먼저 적은 것');
+  await login(pg, 'race@example.com');
+  const wid = await pg.evaluate(() => App.week.weekId);
+
+  api.syncAllDelay = 700;                     // 오가는 사이를 넓힌다
+  const flying = pg.evaluate(() => Sync.syncAll());
+  await pg.waitForTimeout(200);               // 응답이 오기 전에
+
+  await pg.evaluate(() => {
+    const now = Date.now();
+    App.week.days.mon.push({ id: 'mid', text: '오가는 사이에 적은 것',
+      struck: false, createdAt: now, updatedAt: now, strikes: [] });
+    App.week.days.tue.push({ id: 'gone', text: '곧 지울 것',
+      struck: false, createdAt: now, updatedAt: now, strikes: [] });
+    App.save();
+  });
+  await pg.waitForTimeout(80);
+  await pg.evaluate(() => {
+    const now = Date.now();
+    const first = App.week.days.mon.find(i => i.text === '먼저 적은 것');
+    first.struck = true;
+    first.strikes = [{ line: 0, a: 0.02, b: 0.97, seed: 12345 }];
+    first.updatedAt = now;
+    App.week.notes.mon = '오가는 사이에 적은 메모';
+    App.week.noteAt.mon = now;
+    App.week.days.tue = App.week.days.tue.filter(i => i.id !== 'gone');
+    App.week.graves.gone = now;
+    App.save();
+  });
+
+  await flying;
+  api.syncAllDelay = 0;
+  await pg.waitForTimeout(1600);              // 뒤따르는 올리기까지 끝나도록
+
+  const local = await pg.evaluate(() => {
+    const w = loadWeek(App.week.weekId);
+    const first = w.days.mon.find(i => i.text === '먼저 적은 것');
+    return {
+      added: w.days.mon.some(i => i.text === '오가는 사이에 적은 것'),
+      struck: !!(first && first.struck),
+      strikes: first ? first.strikes.length : 0,
+      note: w.notes.mon,
+      deleted: !w.days.tue.some(i => i.id === 'gone'),
+    };
+  });
+  check('적은 것이 남는다', local.added, true);
+  check('그은 것이 남는다', [local.struck, local.strikes], [true, 1]);
+  check('메모가 남는다', local.note, '오가는 사이에 적은 메모');
+  check('지운 것은 지워진 채로 남는다', local.deleted, true);
+
+  const server = api.weeks[wid] || blankWeek(wid);
+  const sFirst = server.days.mon.find(i => i.text === '먼저 적은 것');
+  check('서버에도 적은 것이 올라가 있다',
+    server.days.mon.some(i => i.text === '오가는 사이에 적은 것'), true);
+  check('서버에도 그은 것이 있다', !!(sFirst && sFirst.struck), true);
+  check('서버에도 메모가 있다', server.notes.mon, '오가는 사이에 적은 메모');
+  check('서버에도 지운 표시가 있다', !!server.graves.gone, true);
+  await pg.close();
+}
+
+/* 전부 맞추기와 한 주 올리기가 겹쳐도 한 줄로 선다 */
+{
+  const pg = await fresh('queue@example.com', '줄 서기');
+  await login(pg, 'queue@example.com');
+  api.syncAllDelay = 400;
+  api.syncDelay = 400;
+  const both = await pg.evaluate(async () => {
+    const seen = [];
+    await Promise.all([
+      Sync.syncAll().then(() => seen.push('all')),
+      Sync.push().then(() => seen.push('push')),
+      Sync.push().then(() => seen.push('push2')),
+    ]);
+    return seen.length;
+  });
+  api.syncAllDelay = 0; api.syncDelay = 0;
+  check('겹쳐 불러도 모두 끝난다', both >= 2, true);
+  check('한 번에 하나만 돈다', await pg.evaluate(() => Sync.pushQueued), false);
+  await pg.close();
 }
 
 console.log('\n── 확대 차단 ──');

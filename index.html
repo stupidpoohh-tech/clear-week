@@ -554,6 +554,14 @@
         <button id="authGo" type="button">확인</button>
       </span>
     </div>
+    <!-- 인증 전에는 이 줄만 나온다. **이어진 것처럼 보이면 안 된다** (P0-1) -->
+    <div class="row" id="verifyRow" hidden>
+      <span class="k">메일 인증</span>
+      <span class="v">
+        <button id="verifyGo" type="button">인증 확인</button>
+        <button id="verifyResend" type="button">메일 다시 보내기</button>
+      </span>
+    </div>
     <div class="row">
       <span class="k">백업</span>
       <span class="v">
@@ -1197,6 +1205,8 @@ const SYNC = {
   pushDelayMs: 900,     // 고치고 이만큼 뒤에 올린다 (연달아 적을 때 매번 보내지 않게)
   pollMs: 15000,        // 화면이 켜져 있는 동안 이 간격으로 맞춰 본다
   tokenTtlMs: 50 * 60000,  // Firebase ID token은 한 시간짜리 — 그 전에 갈아 끼운다
+  allRounds: 3,         // 전부 맞추는 동안 손이 움직이면 이만큼까지 다시 올린다
+  verifyWaitMs: 60000,  // 인증 메일을 다시 보내기까지 기다리는 시간
 };
 
 /* Firebase가 돌려주는 이유를 사람 말로 옮긴다. 조용히 실패하지 않는다 */
@@ -1213,6 +1223,11 @@ const AUTH_ERRORS = {
   USER_DISABLED: '멈춰 있는 계정입니다',
   TOO_MANY_ATTEMPTS_TRY_LATER: '잠시 뒤에 다시 해 주세요',
   OPERATION_NOT_ALLOWED: '이메일/비밀번호 로그인이 꺼져 있습니다',
+  /* 인증 메일 쪽에서 오는 것들 (P0-1) */
+  INVALID_ID_TOKEN: '다시 로그인해 주세요',
+  TOKEN_EXPIRED: '다시 로그인해 주세요',
+  USER_NOT_FOUND: '다시 로그인해 주세요',
+  INVALID_RECIPIENT_EMAIL: '그 주소로는 메일을 보낼 수 없습니다',
   'network': '연결이 안 됩니다',
 };
 
@@ -1240,7 +1255,11 @@ const Sync = {
   email: null, uid: null, refresh: null,
   token: null, tokenAt: 0,
   ready: false,           // 서버(KV)가 준비돼 있는지
-  busy: false, pending: false, timer: null, pushTimer: null,
+  atomic: false,          // 같은 주에 동시에 밀 때 서버가 한 줄로 세우는지
+  verified: false,        // 메일 인증이 끝났는지 — 끝나야 서버로 나간다
+  chain: Promise.resolve(),   // 서버로 쓰는 길은 한 줄로 (spec §11)
+  mailAt: 0, mailBusy: false,  // 인증 메일 — 언제 보냈는지, 보내는 중인지
+  pushQueued: false, timer: null, pushTimer: null,
   host: null, onChange: null,
 
   /* Firebase 웹 config가 없으면 로그인 자체를 켜지 않는다 — 캘린더 값이
@@ -1253,6 +1272,10 @@ const Sync = {
       const raw = JSON.parse(localStorage.getItem(AUTH_KEY) || 'null');
       if (raw && raw.refresh && raw.email) {
         this.email = raw.email; this.uid = raw.uid || null; this.refresh = raw.refresh;
+        /* 이 자리가 없는 것은 이 변경 전에 저장된 기기다. 그때는 인증된 계정만
+           서버에 닿을 수 있었으므로 쓰던 사람으로 본다 — 틀렸으면 서버가
+           401로 알려 주고 `denied()`가 바로잡는다. */
+        this.verified = raw.verified !== false;
       }
     } catch (e) { /* 못 읽으면 안 이어진 것이다 */ }
   },
@@ -1260,8 +1283,10 @@ const Sync = {
   remember() {
     try {
       if (this.email && this.refresh) {
-        localStorage.setItem(AUTH_KEY,
-          JSON.stringify({ refresh: this.refresh, uid: this.uid, email: this.email }));
+        localStorage.setItem(AUTH_KEY, JSON.stringify({
+          refresh: this.refresh, uid: this.uid, email: this.email,
+          verified: this.verified,
+        }));
       } else localStorage.removeItem(AUTH_KEY);
     } catch (e) { Store.fail(); }
   },
@@ -1290,34 +1315,134 @@ const Sync = {
     const out = await this.fbPost(
       'https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=' + CAL.apiKey,
       { email, password, returnSecureToken: true });
-    this._land(out);
+    await this.land(out);
   },
+
+  /*
+   * **새 계정에는 인증 메일이 함께 나간다** (P0-1, 2026-09-14).
+   *
+   * 서버는 Firebase가 메일 주인을 확인한 계정만 받는다(`email_verified`).
+   * 그런데 여기서 만든 계정에는 인증 메일이 나가지 않았다 — 새로 만든 사람은
+   * 영영 이어지지 않는데 화면에는 **이어진 것처럼** 보였다. 그것이 이 문제다.
+   * 서버의 검증을 낮추는 것은 답이 아니다. 빠진 것은 메일 쪽이었다.
+   */
   async signUp(email, password) {
     const out = await this.fbPost(
       'https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=' + CAL.apiKey,
       { email, password, returnSecureToken: true });
-    this._land(out);
+    await this.land(out, true);
   },
 
-  _land(out) {
+  async land(out, fresh) {
     this.email = String(out.email || '').toLowerCase();
     this.uid = out.localId;
     this.refresh = out.refreshToken;
     this.token = out.idToken;
     this.tokenAt = Date.now();
+    this.verified = false;
+    this.mailAt = 0;
     this.remember();
     /* 로그인 폼을 접어 준다 — 안 접으면 계정 화면이 이어짐 상태로 안 넘어간다 */
     if (this.host) this.host.authStep = null;
+    if (fresh) {
+      /* 방금 만든 계정 — 메일부터 보낸다. 이어지는 것은 인증 뒤의 일이다 */
+      if (this.onChange) this.onChange();
+      await this.sendVerifyMail(true);
+      return;
+    }
+    await this.confirm({ link: true, quiet: true });
+  },
+
+  /*
+   * 인증 메일 보내기. **중복 요청을 막는다** — 두 번 눌러도 한 번만 나가고,
+   * 보낸 지 얼마 안 됐으면 남은 시간을 알린다. Firebase 쪽 한도에 걸려
+   * 아무 말 없이 안 나가는 것보다 이쪽이 낫다.
+   */
+  async sendVerifyMail(first) {
+    if (this.mailBusy) return false;
+    const left = SYNC.verifyWaitMs - (Date.now() - this.mailAt);
+    if (!first && this.mailAt && left > 0) {
+      this.mark('조금 전에 보냈습니다 · ' + Math.ceil(left / 1000) + '초 뒤에 다시 보낼 수 있습니다');
+      return false;
+    }
+    this.mailBusy = true;
+    try {
+      const token = await this.idToken();
+      await this.fbPost(
+        'https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=' + CAL.apiKey,
+        { requestType: 'VERIFY_EMAIL', idToken: token });
+      this.mailAt = Date.now();
+      this.mark(first
+        ? '인증 메일을 보냈습니다 · 메일의 링크를 누른 뒤 [인증 확인]'
+        : '인증 메일을 다시 보냈습니다');
+      return true;
+    } catch (e) {
+      this.mark(AUTH_ERRORS[e.code] || '인증 메일을 보내지 못했습니다 · 잠시 뒤에 다시');
+      return false;
+    } finally { this.mailBusy = false; }
+  },
+
+  /*
+   * 인증이 끝났는지 **Firebase에 직접 물어본다.**
+   * 끝났으면 토큰을 새로 받는다 — 서버가 보는 것은 토큰 안의 `email_verified`라,
+   * 인증 전에 받은 토큰을 계속 쓰면 서버는 여전히 아니라고 한다.
+   */
+  async lookupVerified() {
+    const token = await this.idToken();
+    const out = await this.fbPost(
+      'https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=' + CAL.apiKey,
+      { idToken: token });
+    const user = (out.users && out.users[0]) || {};
+    if (!user.emailVerified) return false;
+    this.token = null; this.tokenAt = 0;
+    await this.idToken();
+    return true;
+  },
+
+  /*
+   * 인증 확인 — 끝났으면 **그때부터** 이어진다.
+   * `link`면 기기를 잇는 물음까지 이어서 한다 (로그인 직후).
+   * `quiet`면 아직이어도 다그치지 않는다 (앱을 열 때 조용히 확인하는 길).
+   */
+  async confirm({ link = false, quiet = false } = {}) {
+    let ok;
+    try { ok = await this.lookupVerified(); }
+    catch (e) {
+      if (!quiet) this.mark(AUTH_ERRORS[e.code] || '확인하지 못했습니다 · 잠시 뒤에 다시');
+      return false;
+    }
+    this.verified = ok;
+    this.remember();
     if (this.onChange) this.onChange();
+    if (!ok) {
+      if (!quiet) this.mark('아직 인증 전입니다 · 메일의 링크를 누른 뒤 다시 눌러 주세요');
+      return false;
+    }
     this.begin();
-    /* 로그인 직후 서버에 있는 것을 물어본다 — 기기를 새로 이을 때 그 답으로
-       "합칠지" 물어야 한다. `host`가 그 판단을 한다. */
-    if (this.host && this.host.onLinked) this.host.onLinked();
+    if (link && this.host && this.host.onLinked) this.host.onLinked();
+    else this.push();
+    return true;
+  },
+
+  /*
+   * 서버가 거절했다(401). **인증 전인 것과 로그인이 죽은 것은 다르다** —
+   * 인증 전이라고 로그아웃시키면 이 기기에 적은 것과의 연결이 끊긴다.
+   */
+  async denied() {
+    let ok;
+    try { ok = await this.lookupVerified(); }
+    catch (e) { return; }            // 못 물어봤으면 그대로 둔다
+    if (ok) { this.logout(); return; }
+    this.verified = false;
+    this.remember();
+    this.stop();
+    if (this.onChange) this.onChange();
   },
 
   logout() {
     this.email = null; this.uid = null; this.refresh = null;
     this.token = null; this.tokenAt = 0;
+    this.verified = false; this.mailAt = 0;
     this.stop();
     this.remember();
     if (this.onChange) this.onChange();
@@ -1329,10 +1454,17 @@ const Sync = {
       const r = await fetch('/api/me');
       const d = await r.json().catch(() => ({}));
       this.ready = !!d.ready;
+      /* 같은 주에 동시에 밀 때 서버가 한 줄로 세우는지 (spec §11, 2026-09-14).
+         지금은 알리기만 한다 — 되는 척하지 않으려고 내려받는 값이다. */
+      this.atomic = !!d.atomic;
     } catch (e) { this.ready = false; }
     this.load();
     if (this.onChange) this.onChange();
-    if (this.email) { this.begin(); this.push(); }
+    if (!this.email) return;
+    if (this.verified) { this.begin(); this.push(); }
+    /* 아직 인증 전인 기기는 열 때마다 조용히 한 번 물어본다 — 사람이
+       다른 기기에서 메일 링크를 눌렀을 수 있다 */
+    else this.confirm({ quiet: true });
   },
 
   /* 짧은 idToken은 메모리에만 — 필요할 때 refresh로 새로 받는다.
@@ -1358,6 +1490,7 @@ const Sync = {
   },
 
   begin() {
+    if (!this.verified) return;      // 인증 전에는 서버로 나가지 않는다
     clearInterval(this.timer);
     this.timer = setInterval(() => {
       if (document.visibilityState === 'visible') this.push();
@@ -1383,12 +1516,32 @@ const Sync = {
     return data || {};
   },
 
+  /*
+   * 서버로 쓰는 길은 둘(`push`·`syncAll`)이고 **같은 주를 건드린다.**
+   * 겹치면 한쪽의 응답이 다른 쪽 뒤에 도착해 낡은 것을 덮는다.
+   * 그래서 한 번에 하나만 돈다 — 줄을 세운다 (spec §11, 2026-09-14).
+   *
+   * `push`는 뒤에 하나만 붙는다(연달아 적을 때 요청이 쌓이지 않게).
+   * `syncAll`은 부른 쪽이 결과를 기다리므로 접지 않고 제 차례를 기다린다.
+   */
+  run(fn) {
+    const next = this.chain.then(fn, fn);
+    this.chain = next.then(() => {}, () => {});
+    return next;
+  },
+
+  push() {
+    if (this.pushQueued) return this.chain;   // 이미 뒤에 하나 붙어 있다
+    this.pushQueued = true;
+    return this.run(async () => { this.pushQueued = false; await this.pushOne(); });
+  },
+
+  syncAll() { return this.run(() => this.syncEvery()); },
+
   /* 지금 보는 주를 올리고, 합쳐진 것을 받아 그대로 쓴다.
      올리기와 받기를 나누면 그 사이에 갈라진다 — 한 번에 한다. */
-  async push() {
-    if (!this.email || !this.host) return;
-    if (this.busy) { this.pending = true; return; }
-    this.busy = true;
+  async pushOne() {
+    if (!this.email || !this.host || !this.verified) return;
     try {
       const week = this.host.currentWeek();
       if (!week) return;
@@ -1404,23 +1557,39 @@ const Sync = {
       if (out.week) this.host.adopt(out.week);
       this.mark('');
     } catch (e) {
-      if (e.status === 401) { this.logout(); }
+      if (e.status === 401) { this.denied(); }
       else this.mark('연결 안 됨');
-    } finally {
-      this.busy = false;
-      if (this.pending) { this.pending = false; this.push(); }
     }
   },
 
-  /* 로그인 직후·기기를 새로 이을 때 — 가진 주를 전부 올리고 전부 받아온다 */
-  async syncAll() {
-    if (!this.email || !this.host) return;
-    const out = await this.call('/api/sync/all', {
-      method: 'POST',
-      body: JSON.stringify({ weeks: this.host.allWeeks(), resetAt: localResetAt() }),
-    });
-    this.host.applyReset(out.resetAt);
-    this.host.adoptAll(out.weeks || {});
+  /*
+   * 로그인 직후·기기를 새로 이을 때 — 가진 주를 전부 올리고 전부 받아온다.
+   *
+   * **오가는 동안 사람이 더 적을 수 있다.** 예전에는 받은 것을 그대로
+   * `adoptAll`로 덮어서, 응답을 기다리는 사이에 적은 항목·그은 획·지운 것이
+   * 소리 없이 사라졌다 (P0-2, 2026-09-14). `push`에는 있던 방패가 여기엔 없었다.
+   *
+   * **다만 여기서는 버리지 않고 다시 올린다.** 전부 맞추기는 결과를 받아야
+   * 끝나는 일이라, 낡았다고 그냥 두면 두 쪽이 어긋난 채로 남는다.
+   * 다시 올리면 그 사이에 적은 것까지 함께 올라가고, **합치는 것은 언제나
+   * 서버다** — 이쪽은 지금 가진 것을 보낼 뿐 합치지 않는다.
+   */
+  async syncEvery() {
+    if (!this.email || !this.host || !this.verified) return;
+    for (let round = 0; round < SYNC.allRounds; round++) {
+      const sentRev = this.host.rev;
+      const out = await this.call('/api/sync/all', {
+        method: 'POST',
+        body: JSON.stringify({ weeks: this.host.allWeeks(), resetAt: localResetAt() }),
+      });
+      /* 그 사이에 서버가 비워졌으면 그것이 먼저다 */
+      if (this.host.applyReset(out.resetAt)) return;
+      if (this.host.rev === sentRev) { this.host.adoptAll(out.weeks || {}); return; }
+      /* 손이 움직였다 — 방금 받은 것은 이미 낡았다. 지금 것으로 다시 올린다 */
+    }
+    /* 계속 움직여 자리가 안 잡히면 **덮지 않는다.** 올린 것은 서버에 들어갔으니
+       잃은 것은 없고, 손이 멎으면 다음 차례에 맞는다. */
+    this.schedule();
   },
 
   /* 서버에 무엇이 있는지 보기만 한다 — 합치기 전에 물어보려면 필요하다 */
@@ -1434,7 +1603,7 @@ const Sync = {
   },
 
   schedule() {
-    if (!this.email) return;
+    if (!this.email || !this.verified) return;
     clearTimeout(this.pushTimer);
     this.pushTimer = setTimeout(() => this.push(), SYNC.pushDelayMs);
   },
@@ -1506,7 +1675,9 @@ const Cal = {
   host: null, onChange: null,
 
   /* 설정이 없거나 로그인하지 않았으면 이 기능은 없는 것이다 */
-  live() { return Sync.live() && !!(Sync.email && Sync.uid); },
+  /* **인증 전에는 캘린더도 받지 않는다.** 한쪽만 이어지면 "이어진 것 같은데
+     안 맞는" 자리가 생긴다 — 인증이 끝나야 둘 다 열린다 (P0-1) */
+  live() { return Sync.live() && !!(Sync.email && Sync.uid && Sync.verified); },
 
   async post(url, body, token) {
     const res = await fetch(url, {
@@ -3132,6 +3303,16 @@ const App = {
     });
 
     el('authGo').addEventListener('click', () => this.doAuth());
+
+    /* 인증 확인 — 최신 토큰을 다시 받아 `email_verified`를 되묻는다 */
+    el('verifyGo').addEventListener('click', async () => {
+      if (this.verifyBusy) return;
+      this.verifyBusy = true;
+      this.renderAuth('확인하는 중…');
+      try { await Sync.confirm({ link: true }); }
+      finally { this.verifyBusy = false; }
+    });
+    el('verifyResend').addEventListener('click', () => Sync.sendVerifyMail());
     el('loginEmail').addEventListener('keydown', e => {
       if (e.key === 'Enter') { e.preventDefault(); el('loginPw').focus(); }
     });
@@ -3165,6 +3346,8 @@ const App = {
       }
       Log.ev('login', 'verify');
       document.getElementById('loginPw').value = '';
+      /* 인증이 끝난 계정이면 여기서 이미 이어져 있다. 아니면 인증 줄이 떠 있다 */
+      if (!Sync.verified) this.renderAuth();
     } catch (e) {
       Log.ev('login', 'fail');
       this.renderAuth(AUTH_ERRORS[e.code] || '안 됐습니다 · 잠시 뒤에 다시');
@@ -3254,13 +3437,21 @@ const App = {
     el('logoutBtn').hidden = !Sync.email;
     el('authFormRow').hidden = !on;
     el('authPwRow').hidden = !on;
-    el('wipeRow').hidden = !Sync.email || on;
+    /* **인증을 기다리는 중**은 로그인과도 로그아웃과도 다른 자리다 (P0-1).
+       이 기기에는 계속 적히지만 서버로는 아무것도 나가지 않는다. */
+    const waiting = !!Sync.email && !Sync.verified;
+    el('verifyRow').hidden = !waiting;
+    el('wipeRow').hidden = !Sync.email || on || waiting;
     if (!Sync.email) { el('linkRow').hidden = true; this.wipeArmed = false; }
+    if (waiting) el('linkRow').hidden = true;
     if (!this.wipeArmed) el('wipeBtn').textContent = '전부 비우기';
-    /* 머리말의 사람 표시도 같이 바뀐다 */
-    el('acctBtn').classList.toggle('on', !!Sync.email);
+    /* 머리말의 사람 표시는 **정말로 이어졌을 때만** 진해진다 —
+       인증 전에 진해지면 맞춰지고 있다고 읽힌다 */
+    el('acctBtn').classList.toggle('on', !!Sync.email && Sync.verified);
     el('authMsg').textContent = msg || (Sync.email
-      ? Sync.email + ' · 자동으로 맞춰집니다'
+      ? (waiting
+          ? '인증 메일을 확인해 주세요 · 그전까지 이 기기에만 저장됩니다'
+          : Sync.email + ' · 자동으로 맞춰집니다')
       : on ? '이메일과 비밀번호로 로그인합니다 · 없으면 만들어집니다'
            : '이 기기에만 저장됩니다');
     if (this.guideOn) {

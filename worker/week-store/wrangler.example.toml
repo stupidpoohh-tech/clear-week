@@ -1,0 +1,36 @@
+# Clear Week — 주를 지키는 방 (Durable Object 워커)
+#
+# 이 워커는 **혼자서는 아무것도 하지 않는다.** Pages가 바인딩으로 방만 빌려 쓴다.
+# Pages Functions 안에서는 Durable Object 클래스를 정의할 수 없어서 워커를
+# 따로 둔다 (Pages는 남의 워커가 export한 방에 붙는 것만 된다).
+#
+# 배포 (SETUP.md 7번):
+#
+#   cp wrangler.example.toml wrangler.toml
+#   npx wrangler deploy
+#
+# ⚠️ `wrangler.toml`은 커밋하지 않는다 (.gitignore).
+# ⚠️ **KV 바인딩의 id는 Pages가 쓰는 것과 같은 네임스페이스여야 한다.**
+#    방은 KV를 거울로 쓴다 — 다른 네임스페이스를 걸면 예전 기록을 못 읽는다.
+
+name = "clear-week-store"
+main = "src/index.js"
+compatibility_date = "2026-08-01"
+
+# 방을 밖에 내놓지 않는다. Pages 바인딩으로만 닿는다
+workers_dev = false
+
+[[durable_objects.bindings]]
+name = "WEEK_STORE"
+class_name = "WeekStore"
+
+# 첫 배포에 방 종류를 등록한다. **한 번만 하면 된다** — 이미 배포한 뒤에
+# 이 블록을 지우면 안 된다 (지우면 다음 배포가 방을 못 찾는다)
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["WeekStore"]
+
+# 예전 기록을 읽어 오고, 합친 결과를 거울로 남기는 자리
+[[kv_namespaces]]
+binding = "CLEARWEEK"
+id = "<Pages에 걸어 둔 것과 같은 KV 네임스페이스 ID>"
