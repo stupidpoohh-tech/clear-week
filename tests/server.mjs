@@ -16,7 +16,7 @@
  * Cloudflare가 보장하는 것이고, 여기서 검사하는 것은 우리 코드가 읽기·합치기·
  * 쓰기를 **그 임계 구역 안에서** 하느냐다. 밖에서 읽으면 방이 있어도 샌다.
  */
-import { syncWeek, syncWeeks, listWeeks, wipeAll } from '../functions/_store.js';
+import { syncWeek, syncWeeks, listWeeks, wipeAll, deleteUser } from '../functions/_store.js';
 import { WeekStore } from '../worker/week-store/src/index.js';
 import { blankWeek } from '../functions/_lib.js';
 
@@ -272,6 +272,33 @@ console.log('\n── 전부 맞추기와 한 주 밀기가 겹칠 때 ──');
     syncWeek(env, ME, WID, weekWith(WID, [item('b', '방금 적은 것', T + 1)]), 0),
   ]);
   check('둘 다 남는다', textsOf(kvWeek(kv, ME, WID)).sort(), ['가진 것 전부', '방금 적은 것']);
+}
+
+/* ── 7. 계정 삭제 (P1-5) ────────────────────────────────────── */
+
+console.log('\n── 계정 삭제 ──');
+{
+  const kv = fakeKV();
+  const env = envWithRooms(kv);
+  await syncWeek(env, ME, WID, weekWith(WID, [item('a', '내 것', T)]), 0);
+  await syncWeek(env, 'you@example.com', WID, weekWith(WID, [item('b', '남의 것', T)]), 0);
+
+  await deleteUser(env, ME);
+  check('내 주가 서버에서 사라진다', kvWeek(kv, ME, WID), null);
+  check('**방에서도 사라진다** — 안 그러면 다음 요청에 되살아난다',
+    Object.keys((await listWeeks(env, ME)).weeks), []);
+  check('남의 것은 그대로다', textsOf(kvWeek(kv, 'you@example.com', WID)), ['남의 것']);
+
+  /* 비우기와 다른 점: **비운 시각도 남기지 않는다.** 계정이 사라졌으므로
+     "이보다 오래된 기기를 막아라"를 남겨 둘 대상이 없다 */
+  check('비운 시각도 남지 않는다', kv.map.get('reset:' + ME), undefined);
+
+  /* 같은 주소로 다시 가입하면 빈 서버에서 새로 시작한다 */
+  const again = await syncWeek(env, ME, WID,
+    weekWith(WID, [item('c', '다시 시작', T + 100)]), 0);
+  check('다시 가입하면 빈 자리에서 시작한다', textsOf(again.week), ['다시 시작']);
+  check('지워진 것이 되살아나지 않는다',
+    textsOf(kvWeek(kv, ME, WID)), ['다시 시작']);
 }
 
 console.log(`\n통과 ${pass} / 실패 ${fail}\n`);

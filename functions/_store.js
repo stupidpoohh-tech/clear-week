@@ -159,6 +159,21 @@ export async function listWeeks(env, email) {
 }
 
 /*
+ * 계정을 지운다 (P1-5). 비우기와 다른 점 하나: **비운 시각도 남기지 않는다.**
+ * 계정이 사라지므로 "이보다 오래된 기기는 막아라"를 남겨 둘 대상이 없다.
+ * 같은 주소로 다시 가입하면 빈 서버에서 새로 시작한다.
+ *
+ * Firebase 계정 자체는 여기서 지우지 않는다 — 그것은 기기가 자기 토큰으로 한다.
+ * 서버가 남의 계정을 지울 권한을 갖지 않게 두는 편이 낫다.
+ */
+export async function deleteUser(env, email) {
+  await kvWipe(env, email);
+  await env.CLEARWEEK.delete('reset:' + email);
+  if (isAtomic(env)) await callRoom(env, email, { op: 'wipe', serverReset: Date.now() });
+  return { ok: true };
+}
+
+/*
  * 전부 비우기 — **방과 거울을 함께 비운다.**
  * 방만 두고 KV만 지우면 다음 요청에서 방이 옛 주를 도로 내놓는다.
  * 비운 시각은 KV에 남는다 (`reset:<email>`) — 방이 없는 갈래도 그것을 읽는다.

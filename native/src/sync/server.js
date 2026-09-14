@@ -60,4 +60,11 @@ export const peek = () => call('/api/sync/all', { method: 'GET' });
 /* 전부 비우기. 비운 시각이 남아 오래된 기기가 올리는 것을 막는다 */
 export const wipe = () => call('/api/reset', { method: 'POST' });
 
+/*
+ * 계정 삭제의 서버 몫 (P1-5) — 이 사람의 주를 서버에서 지운다.
+ * **Firebase 계정보다 먼저 부른다.** 계정을 먼저 지우면 토큰이 죽어
+ * 서버 것을 지울 수 없다.
+ */
+export const deleteServerData = () => call('/api/account', { method: 'DELETE' });
+
 export { logout };

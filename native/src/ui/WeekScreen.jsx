@@ -11,10 +11,11 @@
  * **스크롤이 없다.** 한 주가 한 화면이다. 그래서 당겨서 새로고침도 직접 만든다.
  */
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Animated, { useSharedValue, useAnimatedStyle, useFrameCallback } from 'react-native-reanimated';
 import { COLOR, SIZE, PULL, STROKE } from '../core/constants.js';
-import { rangeLabel, isThisWeek } from '../core/week.js';
+import { isThisWeek } from '../core/week.js';
+import { t, rangeLabel } from '../i18n/index.js';
 import { computeLayout } from './layout.js';
 import { pointsFromRecord } from '../core/grain.js';
 import WeekGrid from './WeekGrid.jsx';
@@ -23,14 +24,17 @@ import GestureSurface from './GestureSurface.jsx';
 import Editor from './Editor.jsx';
 import PenPad from './PenPad.jsx';
 import Header from './Header.jsx';
+import MoreWindow from './MoreWindow.jsx';
 
 export default function WeekScreen({
   monday, week, onWeek, onMove, sound, onSound, linked, onAccount, onPull, notice,
+  undo, onUndo,
 }) {
   const [size, setSize] = React.useState({ width: 0, height: 0 });
   const [metrics, setMetrics] = React.useState({});
   const [editing, setEditing] = React.useState(null);
   const [gone, setGone] = React.useState({});   /* 문대는 동안 잠시 사라진 획 */
+  const [moreKey, setMoreKey] = React.useState(null);   /* 잘린 것을 펴 본 칸 */
 
   const live = useSharedValue({ points: [], fraction: 0, n: 0 });
   const trail = useSharedValue([]);
@@ -141,6 +145,8 @@ export default function WeekScreen({
       step();
     },
     pull: () => onPull(),
+    /* 잘렸다는 표시를 눌렀다 — 그 칸의 안 보이던 것을 편다 (P1-2) */
+    more: key => setMoreKey(key),
   }), [layout, live, onPull, onWeek, play]);
 
   const openNote = key => {
@@ -176,6 +182,18 @@ export default function WeekScreen({
         onToday={() => onMove(0)} onSound={onSound} onAccount={onAccount}
       />
       {notice ? <Text style={styles.notice}>{notice}</Text> : null}
+      {/* **지운 직후에만 잠깐 뜨는 한 줄** (P1-2). 삭제함도 확인 창도 아니다 */}
+      {undo && undo.count ? (
+        <View style={styles.undoBar}>
+          <Text style={styles.undoText}>
+            {t(undo.kind === 'note' ? 'undo.note' : 'undo.item')}
+            {undo.count > 1 ? ` · ${undo.count}` : ''}
+          </Text>
+          <Pressable onPress={onUndo} hitSlop={8}>
+            <Text style={styles.undoAction}>{t('undo.action')}</Text>
+          </Pressable>
+        </View>
+      ) : null}
       <Animated.View style={[styles.pull, pullStyle]} />
 
       <View
@@ -205,6 +223,20 @@ export default function WeekScreen({
               ))}
             </View>
           </GestureSurface>
+        ) : null}
+
+        {moreKey ? (
+          <MoreWindow
+            cell={layout.cells.find(c => c.key === moreKey)}
+            items={hiddenItemsOf(layout, week, moreKey)}
+            onClose={() => setMoreKey(null)}
+            onEdit={it => {
+              setMoreKey(null);
+              const rect = itemRect(layout, moreKey, it.id) || blankRect(layout, moreKey);
+              setEditing({ key: moreKey, id: it.id, kind: 'item', rect, value: it.text });
+            }}
+            onDelete={it => onWeek.remove(moreKey, it.id, 'item')}
+          />
         ) : null}
 
         {editing ? (
@@ -237,6 +269,14 @@ function planAuto(layout, week, key, id, kind) {
   });
 }
 
+/* 그 칸에서 잘린 항목들 — 자리 계산이 무엇을 숨겼는지 알고 있다 */
+function hiddenItemsOf(layout, week, key) {
+  const cell = layout.cells.find(c => c.key === key);
+  if (!cell) return [];
+  const ids = new Set(cell.hiddenItems || []);
+  return (week.days[key] || []).filter(it => ids.has(it.id));
+}
+
 const hasNoteStrike = (w, key) =>
   !!(w.noteStrikes && w.noteStrikes[key] && w.noteStrikes[key].length);
 
@@ -259,5 +299,11 @@ const styles = StyleSheet.create({
   notice: {
     fontSize: 11, color: '#e0453a', paddingHorizontal: 10, paddingBottom: 2,
   },
+  undoBar: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingHorizontal: 10, paddingBottom: 3,
+  },
+  undoText: { fontSize: 11, color: COLOR.inkFaint },
+  undoAction: { fontSize: 11, color: '#2870ff', fontWeight: '600' },
   pull: { backgroundColor: COLOR.rule, marginHorizontal: 120, borderRadius: 2 },
 });

@@ -20,12 +20,13 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { COLOR } from '../core/constants.js';
+import { t } from '../i18n/index.js';
 
 const ROWS = [
-  { mark: '＋', text: '빈 곳을 눌러 생성 (요일 아래, 요일 칸, 노트)' },
-  { mark: '↔', text: '글자 위를 그어서 완료. 문지르면 지워져요' },
-  { mark: '✕', text: '꾹 누르면 삭제' },
-  { mark: '사람', text: '로그인하면 기기간 연동할 수 있습니다', needsServer: true },
+  { mark: '＋', key: 'guide.add' },
+  { mark: '↔', key: 'guide.strike' },
+  { mark: '✕', key: 'guide.delete' },
+  { mark: '👤', key: 'guide.sync', needsServer: true },
 ];
 
 export default function GuideCard({ serverReady, onClose }) {
@@ -45,7 +46,7 @@ export default function GuideCard({ serverReady, onClose }) {
             <Text style={[styles.mark, {
               color: COLOR.guide[i], opacity: i === at ? 1 : 0.25,
             }]}>{r.mark}</Text>
-            <Text style={[styles.text, { opacity: i === at ? 1 : 0.25 }]}>{r.text}</Text>
+            <Text style={[styles.text, { opacity: i === at ? 1 : 0.25 }]}>{t(r.key)}</Text>
           </View>
         ))}
 
@@ -54,11 +55,11 @@ export default function GuideCard({ serverReady, onClose }) {
             <View style={[styles.box, never && styles.boxOn]}>
               {never ? <Text style={styles.tick}>✓</Text> : null}
             </View>
-            <Text style={styles.checkText}>다시 보지 않기</Text>
+            <Text style={styles.checkText}>{t('guide.never')}</Text>
           </Pressable>
           {/* 닫는 손잡이는 **끝 줄에 닿아야** 살아난다 */}
           <Pressable onPress={close} disabled={!last} hitSlop={8}>
-            <Text style={[styles.close, { opacity: last ? 1 : 0.2 }]}>닫기</Text>
+            <Text style={[styles.close, { opacity: last ? 1 : 0.2 }]}>{t('guide.close')}</Text>
           </Pressable>
         </View>
       </Pressable>

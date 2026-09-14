@@ -13,8 +13,9 @@
  * 좌표계는 **주간 표 상자**를 원점으로 한다. 잉크 판(Skia)도 손짓 판도 그 상자에
  * 딱 맞게 얹히므로, 여기서 나온 숫자를 아무도 옮기지 않는다.
  */
-import { SIZE, SPLIT, PAD } from '../core/constants.js';
+import { SIZE, SPLIT, PAD, MORE } from '../core/constants.js';
 import { WEEK_DAYS, cellLabel } from '../core/week.js';
+import { t } from '../i18n/index.js';
 import { planColumns } from '../core/columns.js';
 
 const metricOf = (metrics, key) => (metrics && metrics[key]) || null;
@@ -48,7 +49,7 @@ export function computeLayout({ width, height, week, monday, metrics }) {
 
   layCell({
     key: 'free', left: leftW + SPLIT.gap, top: 0, width: freeW, height: height,
-    label: 'note', split: false,
+    label: t('header.note'), split: false,
     week, metrics, cells, items, notes, lines, strokes,
   });
 
@@ -142,8 +143,25 @@ function layCell(ctx) {
     ? { key, x: bodyLeft, y: lowest, w: bodyW, h: room }
     : null;
 
+  /* **잘린 것이 무엇인지도 들고 있는다** (P1-2). 개수만 알면 그 항목에
+     다시 닿을 길이 없다 — 적힌 것을 못 보고 못 고치는 자리가 생긴다 */
+  const shown = new Set(plan.chunks.flat());
+  const hiddenItems = list
+    .map((it, i) => ({ it, i }))
+    .filter(({ i }) => !shown.has(i))
+    .map(({ it }) => it.id);
+
+  /* `+3` 표시를 누를 자리. 표시가 없으면 없다 */
+  const moreRect = plan.hidden > 0 ? {
+    left: left + width - 34 - MORE.tapPad,
+    right: left + width,
+    top: top + height - 16 - MORE.tapPad,
+    bottom: top + height,
+  } : null;
+
   ctx.cells.push({
     key, label, left, top, right: left + width, bottom: top + height,
+    hiddenItems, moreRect,
     labelRect: { x: left, y: top, w: labelW || width, h: headH || SIZE.itemHeight },
     bodyLeft, bodyTop, bodyW, bodyH,
     columns: plan.columns, scale, hidden: plan.hidden, pad, lowest,

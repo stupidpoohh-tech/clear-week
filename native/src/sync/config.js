@@ -22,6 +22,7 @@ export const SYNC = {
   tokenTtlMs: 45 * 60 * 1000,   // idToken은 한 시간짜리다. 넉넉히 앞서 갱신한다
   pushDelayMs: 900,             // 손이 멎고 이만큼 뒤에 올린다
   pollMs: 30000,
+  verifyWaitMs: 60000,          // 인증 메일을 다시 보내기까지 기다리는 시간 (P1-1)
 };
 
 export const CAL = {

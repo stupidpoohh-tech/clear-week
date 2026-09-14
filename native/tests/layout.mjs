@@ -69,6 +69,41 @@ ok('**자리가 좁으면 판을 두지 않는다** — 펜이 글자를 낚아�
   L3.cells[0].bottom - L3.cells[0].lowest >= PAD.minRoom);
 ok('다 못 담으면 잘렸다고 알린다', L3.cells[0].hidden > 0);
 
+/*
+ * 넘친 것에 **닿을 수 있어야 한다** (P1-2). 개수만 알면 적어 둔 것을 다시 보지도
+ * 고치지도 못한다 — 데이터는 있는데 손이 안 닿는 자리가 된다.
+ */
+console.log('\n── 넘친 것 ──');
+{
+  let many = blankWeek('2026-W35');
+  const made = [];
+  for (let i = 0; i < 30; i++) {
+    const r = addItem(many, 'mon', '항목' + i, 1_750_000_000_000 + i);
+    many = r.week; made.push(r.item.id);
+  }
+  const M = lay(many);
+  const c = M.cells.find(x => x.key === 'mon');
+  ok('다 못 담는다', c.hidden > 0);
+  check('**잘린 것이 무엇인지 들고 있다**', c.hiddenItems.length, c.hidden);
+  ok('잘린 것은 그려지지 않은 것들이다',
+    c.hiddenItems.every(id => !M.items.some(it => it.key === 'mon' && it.id === id)));
+  ok('보이는 것과 잘린 것을 합치면 전부다',
+    M.items.filter(it => it.key === 'mon').length + c.hidden === made.length);
+  ok('잘린 것은 뒤쪽 항목들이다 — 앞에서부터 채우므로',
+    c.hiddenItems[c.hiddenItems.length - 1] === made[made.length - 1]);
+
+  ok('누를 자리가 있다', !!c.moreRect);
+  ok('그 자리는 칸 안이다',
+    c.moreRect.right <= c.right + 0.001 && c.moreRect.bottom <= c.bottom + 0.001);
+  ok('넉넉히 눌러진다', (c.moreRect.right - c.moreRect.left) > 20 &&
+    (c.moreRect.bottom - c.moreRect.top) > 20);
+
+  const small = lay(week);      /* 안 넘치는 칸 */
+  const sc = small.cells.find(x => x.key === 'mon');
+  check('안 넘치면 잘린 것도 없다', [sc.hidden, sc.hiddenItems.length], [0, 0]);
+  ok('안 넘치면 누를 자리도 없다', sc.moreRect === null);
+}
+
 console.log('\n── 잰 글자가 자리를 바꾼다 ──');
 const metrics = { ['mon:' + first.id]: { lines: [40, 30] } };   /* 두 줄로 감긴 항목 */
 const L4 = lay(week, 390, 620, metrics);

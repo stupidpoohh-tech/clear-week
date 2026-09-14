@@ -8,13 +8,17 @@
     "backgroundColor": "#ffffff",
     "scheme": "clearweek",
     "newArchEnabled": true,
-    "assetBundlePatterns": ["assets/*"],
+    "assetBundlePatterns": [
+      "assets/*"
+    ],
     "ios": {
       "bundleIdentifier": "dev.clearweek.app",
       "supportsTablet": true,
       "requireFullScreen": false,
       "entitlements": {
-        "com.apple.security.application-groups": ["group.dev.clearweek"]
+        "com.apple.security.application-groups": [
+          "group.dev.clearweek"
+        ]
       },
       "infoPlist": {
         "UIStatusBarStyle": "UIStatusBarStyleDefault",
@@ -25,9 +29,16 @@
       "package": "dev.clearweek.app"
     },
     "plugins": [
-      ["@bacons/apple-targets", { "appleTeamId": "REPLACE_WITH_TEAM_ID" }],
+      [
+        "@bacons/apple-targets",
+        {
+          "appleTeamId": "REPLACE_WITH_TEAM_ID"
+        }
+      ],
       "expo-secure-store",
-      "expo-audio"
+      "expo-audio",
+      "expo-iap",
+      "expo-localization"
     ]
   }
 }

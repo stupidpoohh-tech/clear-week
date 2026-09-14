@@ -245,6 +245,16 @@ export default function GestureSurface({
     .onEnd((e, ok) => {
       'worklet';
       if (!ok) return;
+      /* **잘렸다는 표시를 누르면 그것을 펴 본다** (P1-2). 글자보다 먼저 본다 —
+         표시는 칸 모서리에 있어 마지막 줄과 겹칠 수 있다 */
+      const cells = reg.value.cells;
+      for (let i = 0; i < cells.length; i++) {
+        const m = cells[i].moreRect;
+        if (m && e.x >= m.left && e.x <= m.right && e.y >= m.top && e.y <= m.bottom) {
+          runOnJS(on.more)(cells[i].key);
+          return;
+        }
+      }
       const line = lineAt(reg.value.lines, e.x, e.y);
       if (line) { runOnJS(on.edit)(line.key, line.id, line.kind); return; }
       const cell = cellAt(reg.value.cells, e.x, e.y);

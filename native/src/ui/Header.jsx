@@ -8,6 +8,7 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { COLOR, SIZE, STROKE } from '../core/constants.js';
+import { t } from '../i18n/index.js';
 import { SoundIcon, AccountIcon } from './Icon.jsx';
 
 export default function Header({
@@ -23,7 +24,7 @@ export default function Header({
       <Pressable onPress={onNext} hitSlop={10}><Text style={styles.arrow}>›</Text></Pressable>
       {away ? (
         <Pressable onPress={onToday} hitSlop={8}>
-          <Text style={styles.today}>today</Text>
+          <Text style={styles.today}>{t('header.today')}</Text>
         </Pressable>
       ) : null}
       <View style={{ flex: 1 }} />

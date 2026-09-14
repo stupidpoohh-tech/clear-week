@@ -56,3 +56,25 @@ export function todayKey(monday, now = new Date()) {
   if (!isThisWeek(monday, now)) return null;
   return WEEK_DAYS[(now.getDay() + 6) % 7];
 }
+
+/*
+ * 주가 넘어갔나 (P1-2) — **앱을 며칠 켜 둔 채로 두어도 이번 주가 따라간다.**
+ *
+ * 일요일 밤에 열어 둔 화면이 월요일 아침에도 지난주를 보여 주면, 거기에 적은
+ * 것이 지난주로 들어간다. 그래서 앱이 앞으로 돌아올 때와 자정을 지날 때
+ * 이것을 물어본다.
+ *
+ * **보고 있던 주가 이번 주였을 때만** 옮긴다. 사람이 일부러 지난주를 펴 둔
+ * 것이라면 그대로 둔다 — 지난 주도 고쳐 쓸 수 있는 제품이다 (spec §3).
+ * **옮기는 것은 화면뿐이다. 항목은 따라가지 않는다** (자동 이월 없음, 규칙 2).
+ */
+export function rolledOver(shownMonday, wasThisWeek, now = new Date()) {
+  if (!wasThisWeek) return false;
+  return weekIdOf(shownMonday) !== weekIdOf(now);
+}
+
+/* 다음 주가 시작할 때까지 남은 밀리초. 타이머를 그때에 맞춘다 */
+export function untilNextWeek(now = new Date()) {
+  const next = addWeeks(mondayOf(now), 1);
+  return Math.max(1000, next.getTime() - now.getTime());
+}

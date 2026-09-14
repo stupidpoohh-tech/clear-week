@@ -23,6 +23,8 @@ export const INDEX_KEY = PREFIX + 'index';        /* 적은 적 있는 주 목�
 export const GUIDE_KEY = PREFIX + 'guide-seen';
 export const RESET_KEY = PREFIX + 'reset-at';   /* 마지막으로 전부 비운 시각 */
 export const SOUND_KEY = PREFIX + 'sound';
+export const OWNED_KEY = PREFIX + 'owned';        /* 구매했는지 (P1-4) */
+export const LANG_KEY = PREFIX + 'lang';          /* 사람이 고른 말 (P1-3) */
 export const WIDGET_KEY = 'week';                 /* 위젯이 읽는 자리 */
 
 const shared = Platform.OS === 'ios' ? new ExtensionStorage(APP_GROUP) : null;
@@ -127,3 +129,21 @@ export function clearWeeks() {
 /* 소리는 **꺼 둔 것만** 기억한다. 기본은 켜짐이다 */
 export const soundOff = () => take(SOUND_KEY) === 'off';
 export const setSoundOff = off => (off ? put(SOUND_KEY, 'off') : drop(SOUND_KEY));
+
+/*
+ * 구매했는지 (P1-4). **스토어가 원본이고 이것은 사본이다** — 비행기 안에서
+ * 열어도 산 사람이 잠겨 있지 않게 하려고 둔다. 스토어에 닿으면 다시 맞춘다.
+ */
+export const owned = () => take(OWNED_KEY) === '1';
+export const setOwned = v => (v ? put(OWNED_KEY, '1') : drop(OWNED_KEY));
+
+/* 사람이 고른 말 (P1-3). 없으면 기기 설정을 따른다 */
+export const lang = () => take(LANG_KEY);
+export const setLang = v => (v ? put(LANG_KEY, String(v)) : drop(LANG_KEY));
+
+/* 계정 삭제에서 "이 기기 것도 지우기"를 골랐을 때 (P1-5) */
+export function clearEverything() {
+  clearWeeks();
+  drop(GUIDE_KEY);
+  drop(RESET_KEY);
+}
