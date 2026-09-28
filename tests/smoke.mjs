@@ -187,13 +187,13 @@ const 안내글 = () => page.evaluate(() =>
                          .replace(/\s+/g, ' ').trim()));
 check('네 가지를 이 차례로 말한다', await 안내글(), [
   '빈 곳을 눌러 생성 (요일 아래, 요일 칸, 노트)',
-  '글자 위를 그어서 완료. 문지르면 지워져요',
+  '오른쪽으로 그어 완료. 왼쪽으로 되짚으면 지우기',
   '꾹 누르면 삭제',
   '로그인하면 기기간 연동할 수 있습니다',
 ]);
 check('중요한 말은 굵게', await page.evaluate(() =>
   Array.from(document.querySelectorAll('.guide-list li:not([hidden]) b')).map(e => e.textContent)),
-  ['생성', '완료', '삭제', '기기간 연동']);
+  ['생성', '완료', '지우기', '삭제', '기기간 연동']);
 
 /* 안내는 카드일 뿐이다 — 주간 표를 건드리지 않는다.
    예전에는 표본 주를 끼워 넣느라 저장·동기화를 멈춰 세워야 했다. */
@@ -823,6 +823,65 @@ console.log('\n── 지우개는 어중간한 상태를 남기지 않는다 �
   await rub(0.12);
   check('덜 지웠으면 잉크가 온전히 돌아온다 (잔흔 없음)',
     await inkState(), { 획: 1, 남은마스크: 0, 저장: [1] });
+
+  /*
+   * **되짚으면 한 번에 지워진다** (spec §20, 2026-09-27).
+   * 문지르기는 같은 자리를 두 번 이상 지나야 지워진다 — 그것이 손맛이지만
+   * 급한 손에는 안 들었다. 한 번 쓸고 떼면 잉크가 돌아오니 안 지워진다고 느낀다.
+   * 긋는 방향(왼→오)의 반대로 한 번 되짚으면 그 획은 통째로 사라진다.
+   */
+  const sweep = async (fromRight, span = 1) => {
+    const r = await page.evaluate(() => {
+      const el = App.cells.wed.listEl.querySelector('.item-text');
+      const q = document.createRange(); q.selectNodeContents(el);
+      const b = Array.from(q.getClientRects()).filter(v => v.width > 1)[0];
+      return { x: b.x, y: b.y, w: b.width, h: b.height };
+    });
+    const y = r.y + r.h / 2;
+    const lo = r.x + r.w * (1 - span) / 2, hi = r.x + r.w * (1 - (1 - span) / 2);
+    const [a, b] = fromRight ? [hi, lo] : [lo, hi];
+    await page.mouse.move(a, y); await page.mouse.down();
+    for (let i = 1; i <= 14; i++) {
+      await page.mouse.move(a + (b - a) * (i / 14), y);
+      await page.waitForTimeout(9);
+    }
+    await page.mouse.up(); await page.waitForTimeout(400);
+  };
+
+  await seedStruck(); await page.waitForTimeout(400);
+  await sweep(true);
+  check('**오른쪽에서 왼쪽으로 한 번 되짚으면 지워진다**',
+    await inkState(), { 획: 0, 남은마스크: 0, 저장: [0] });
+
+  /* 긋는 방향으로 한 번 쓴 것은 지우기가 아니다 — 그랬다면 방향이 뜻을 잃는다 */
+  await seedStruck(); await page.waitForTimeout(400);
+  await sweep(false);
+  check('왼쪽에서 오른쪽으로 한 번 쓴 것은 잉크가 돌아온다',
+    await inkState(), { 획: 1, 남은마스크: 0, 저장: [1] });
+
+  /* 끝만 살짝 되짚은 것은 되짚은 것이 아니다 */
+  await seedStruck(); await page.waitForTimeout(400);
+  await sweep(true, 0.2);
+  check('조금만 되짚으면 그대로 남는다',
+    await inkState(), { 획: 1, 남은마스크: 0, 저장: [1] });
+
+  /* 문지르기는 그대로 산다 — 두 손짓이 한자리에서 같이 돈다 */
+  await seedStruck(); await page.waitForTimeout(400);
+  await rub(1.0);
+  check('되짚기가 생겨도 문지르기는 그대로 지운다',
+    await inkState(), { 획: 0, 남은마스크: 0, 저장: [0] });
+
+  /* 안 그어진 항목에서는 방향이 뜻을 갖지 않는다 — 어느 쪽으로 그어도 긋기다 */
+  await page.evaluate(() => {
+    const now = Date.now();
+    App.week.days.wed = [{ id: 'e2', text: '왼쪽으로 그어도 그어진다', struck: false,
+      createdAt: now, updatedAt: now, strikes: [] }];
+    App.save(); App.render();
+  });
+  await page.waitForTimeout(400);
+  await sweep(true);
+  check('안 그어진 항목은 되짚어도 그어진다',
+    await page.evaluate(() => App.week.days.wed[0].strikes.length > 0), true);
 
   await page.evaluate(() => { App.week.days.wed = []; App.save(); App.render(); });
   await page.waitForTimeout(250);

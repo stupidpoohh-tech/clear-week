@@ -59,6 +59,26 @@ export function fullyErased(state) {
   return coverage(state) >= 1;
 }
 
+/*
+ * **오른쪽에서 왼쪽으로 한 번에 되짚었나** (spec §20).
+ *
+ * 긋는 방향(왼→오)의 반대가 지우는 방향이다. 종이에서 줄을 긋고 그 위를
+ * 되짚어 지우는 손짓 그대로다. 조건 셋을 다 넘어야 한다:
+ *   1. 왼쪽으로 갔고 (`back`)
+ *   2. 도중에 방향을 바꾸지 않았고 (`straight` — 바꿨으면 그건 문지르기다)
+ *   3. 그 획의 폭을 `swipeRatio`만큼 지났다
+ *
+ * 문지르기는 그대로 산다. 한 손짓 안에서 두 길이 같이 돈다 —
+ * 급한 손은 한 번에 지우고, 조심스러운 손은 문질러 지운다.
+ */
+export function sweptBack(sweep, stroke) {
+  'worklet';
+  if (!sweep || !sweep.back || !sweep.straight) return false;
+  const width = Math.max(1, stroke.maxX - stroke.minX);
+  const covered = Math.min(sweep.from, stroke.maxX) - Math.max(sweep.to, stroke.minX);
+  return covered / width >= ERASE.swipeRatio;
+}
+
 /* 손을 뗄 때의 결판 */
 export function settle(state) {
   'worklet';

@@ -8,7 +8,7 @@ export default {
   'header.note': 'note',
 
   'guide.add': 'Tap empty space to add (under a date, in a day, in note)',
-  'guide.strike': 'Draw across the text to finish. Rub it out to undo',
+  'guide.strike': 'Draw right to finish. Sweep back left to undo it',
   'guide.delete': 'Press and hold to delete',
   'guide.sync': 'Sign in to keep devices in step',
   'guide.never': "Don't show again",

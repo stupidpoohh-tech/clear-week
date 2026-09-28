@@ -10,7 +10,7 @@ export default {
 
   /* 첫 실행 안내 (spec §4-4) */
   'guide.add': '빈 곳을 눌러 생성 (요일 아래, 요일 칸, 노트)',
-  'guide.strike': '글자 위를 그어서 완료. 문지르면 지워져요',
+  'guide.strike': '오른쪽으로 그어 완료. 왼쪽으로 되짚으면 지우기',
   'guide.delete': '꾹 누르면 삭제',
   'guide.sync': '로그인하면 기기간 연동할 수 있습니다',
   'guide.never': '다시 보지 않기',

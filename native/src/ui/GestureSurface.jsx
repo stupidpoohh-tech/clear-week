@@ -26,7 +26,7 @@ import { lineAt, lineAtY, cellAt, strokeAt, axisOf } from '../core/hit.js';
 import {
   makeGrain, extendPoints, widthForSpeed, commits, recordFor,
 } from '../core/grain.js';
-import { makeBuckets, rub, newPass, fullyErased, settle } from '../core/erase.js';
+import { makeBuckets, rub, newPass, fullyErased, settle, sweptBack } from '../core/erase.js';
 
 export default function GestureSurface({
   children, reg, live, trail, pull, on,
@@ -81,6 +81,8 @@ export default function GestureSurface({
     /* 문댄 자국은 방향이 바뀔 때마다 새로 시작한다 */
     const dir = x > st.lastX ? 1 : (x < st.lastX ? -1 : st.dir);
     if (dir !== st.dir && dir !== 0) {
+      /* 처음 방향이 잡히는 것은 바뀐 것이 아니다. 그다음부터가 문지르기다 */
+      if (st.dir !== 0) st.turns += 1;
       st.dir = dir;
       st.passes.push([]);
       for (const k of Object.keys(st.buckets)) newPass(st.buckets[k]);
@@ -108,11 +110,19 @@ export default function GestureSurface({
     const st = rubs.value;
     trail.value = [];
     if (!st) return;
+    /* **한 번에 되짚어 왔으면 그것으로 끝이다** (spec §20). 문지른 것이라면
+       예전처럼 쌓인 양으로 결판을 낸다 — 두 길이 한 손짓 안에 같이 있다. */
+    const sweep = {
+      from: st.fromX, to: st.lastX,
+      back: st.lastX < st.fromX - STROKE.slopPx,
+      straight: st.turns === 0,
+    };
     /* **손을 뗄 때의 정리는 닿았던 획 전부에 걸린다.** 주인만 정리하면 남의
        항목에 벗겨진 잉크가 남는다 (HANDOFF §4-7). */
     const gone = [];
     for (const k of Object.keys(st.buckets)) {
-      if (settle(st.buckets[k]) === 'remove') gone.push(st.seen[k]);
+      const s = st.seen[k];
+      if (sweptBack(sweep, s) || settle(st.buckets[k]) === 'remove') gone.push(s);
     }
     rubs.value = null;
     if (gone.length) runOnJS(on.eraseMany)(gone);
@@ -148,7 +158,10 @@ export default function GestureSurface({
         /* 가로 — 그어져 있으면 지우개, 아니면 긋기 */
         const over = strokeAt(reg.value.strokes, s.x, s.y);
         if (over) {
-          rubs.value = { buckets: {}, seen: {}, passes: [[]], dir: 0, lastX: s.x };
+          rubs.value = {
+            buckets: {}, seen: {}, passes: [[]],
+            dir: 0, turns: 0, fromX: s.x, lastX: s.x,
+          };
           mode.value = 'erase';
           rubAt(s.x, s.y);
           return;
